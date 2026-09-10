@@ -363,8 +363,8 @@ A：CefGlue 120 依赖 Avalonia 11 的 `Avalonia.ReactiveUI 11.0.9+`，Avalonia 
 | 项 | 值 |
 |---|---|
 | 工作目录 | `~/Dev/FlashBrowser-for-MacOS/` |
-| 仓库远端 origin | 当前 `losseeer/CefFlashBrowser.git`（**待切换**——见 §10.7） |
-| 仓库远端 upstream | `Mzying2001/CefFlashBrowser.git` |
+| 仓库远端 origin | `https://github.com/losseeer/FlashBrowser-for-MacOS.git` ✅（2026-09-10 已切换） |
+| 仓库远端 upstream | 已移除（独立 repo 不再保留上游引用）|
 | 节点 SDK | 系统 `/opt/homebrew/bin/dotnet` 或 `~/.dotnet/dotnet` |
 | 已发布 .app | `dist-FlashBrowser-for-MacOS.app/`（git tracked） |
 | publish 输出 | `publish/`（gitignored） |
@@ -441,18 +441,17 @@ open ./dist-FlashBrowser-for-MacOS.app
 | `Ruffle instance destroyed` ~100ms 后 | `disconnectedCallback` → `destroy()` | Phase 3b 阻塞，未解 |
 | `Serious error ... reading 'stream_from'` | `this.instance` 在 load() 异步期间被 null | 同上 |
 
-### 10.7 待办中的「脏」状态（**新会话接手必看**）
+### 10.7 git 仓库当前状态（**2026-09-10 已修正**）
 
 ```bash
-# 当前 origin 仍指向 fork 仓库，需要切换：
 git remote -v
-# origin	https://github.com/losseeer/CefFlashBrowser.git  ← ❌ 错的
-# upstream	https://github.com/Mzying2001/CefFlashBrowser.git
-
-# 修复（在 GitHub 上先创建空 repo: losseeer/FlashBrowser-for-MacOS）：
-git remote set-url origin git@github.com:losseeer/FlashBrowser-for-MacOS.git
-git push -u origin main
+# origin	https://github.com/losseeer/FlashBrowser-for-MacOS.git  ✅ 独立 repo
+# （upstream 已移除，独立 repo 不再保留上游引用）
 ```
+
+历史 commit：`bec41be` (scaffold) → `872874b` (PLAN v1) → `971d1dc` (PLAN §10+§11)。
+
+新会话接手时**不要重复** `git remote set-url`，直接 `git pull` 即可。
 
 ### 10.8 验证检查清单（每阶段开始 / 结束跑一遍）
 
