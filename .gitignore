@@ -1,0 +1,20 @@
+## .NET / Avalonia / macOS
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+## Publish output
+publish/
+*.app/
+*.dmg
+
+## dotnet-install / runtime cache
+~/.dotnet/
+
+## macOS
+.DS_Store
+
+## Build artifacts
+*.log

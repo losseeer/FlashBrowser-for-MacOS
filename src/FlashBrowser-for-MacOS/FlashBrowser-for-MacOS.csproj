@@ -1,0 +1,54 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseAppHost>true</UseAppHost>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <RootNamespace>FlashBrowserForMacOS</RootNamespace>
+    <AssemblyName>FlashBrowserForMacOS</AssemblyName>
+    <RuntimeIdentifiers>osx-arm64;osx-x64</RuntimeIdentifiers>
+    <RuntimeIdentifier>osx-arm64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- Self-contained build to avoid hostfxr dependency on user machines -->
+    <PublishAot Condition="'$(Configuration)' == 'Release'">false</PublishAot>
+    <ApplicationTitle>FlashBrowser for Mac</ApplicationTitle>
+    <ApplicationId>io.github.losseeer.flashbrowserformacos</ApplicationId>
+  </PropertyGroup>
+
+  <!--
+    Avalonia 11 LTS.
+    NOTE: Use CefGlue.Avalonia.ARM64 (not the default CefGlue.Avalonia which is x86_64).
+    ARM64 variant pulls CefGlue.Common.ARM64 → cef.redist.osx.arm64 — that's the
+    Apple-Silicon native lib. The default CefGlue.Avalonia targets cef.redist.osx64
+    (x86_64) and would need Rosetta on arm64 Macs.
+    Avalonia 12.x is not yet compatible with the upstream CefGlue binding.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.2.7" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.2.7" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.7" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.2.7" />
+    <PackageReference Include="Avalonia.Diagnostics" Version="11.2.7"
+                      Condition="'$(Configuration)' == 'Debug'" />
+    <PackageReference Include="CefGlue.Avalonia.ARM64" Version="120.6099.211" />
+    <!--
+      Pinned for visibility: CefGlue.Common.ARM64 already pulls in
+      cef.redist.osx.arm64 (>=120.1.8) transitively, but we reference
+      it explicitly to make the CEF version visible in csproj.
+    -->
+    <PackageReference Include="cef.redist.osx.arm64" Version="120.1.8" />
+  </ItemGroup>
+
+  <!--
+    Ruffle Flash emulator assets (self-hosted web build v0.6.0).
+    Served via a custom `ruffle://app/...` scheme at runtime.
+  -->
+  <ItemGroup>
+    <None Include="Assets\Ruffle\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

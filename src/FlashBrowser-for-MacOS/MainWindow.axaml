@@ -1,0 +1,52 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="FlashBrowserForMacOS.MainWindow"
+        Title="FlashBrowser for Mac"
+        Width="1180" Height="820"
+        MinWidth="640" MinHeight="480">
+
+  <DockPanel LastChildFill="True">
+
+    <!-- Top: navigation bar -->
+    <Border DockPanel.Dock="Top"
+            Padding="8"
+            Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}">
+      <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto,Auto"
+            RowDefinitions="Auto">
+
+        <Button Grid.Column="0" x:Name="BackButton"     Content="◀"      Margin="0,0,4,0" Padding="10,4"
+                Click="OnBackClicked"/>
+        <Button Grid.Column="1" x:Name="ForwardButton"  Content="▶"      Margin="4,0"     Padding="10,4"
+                Click="OnForwardClicked"/>
+        <Button Grid.Column="2" x:Name="ReloadButton"   Content="⟳"      Margin="4,0"     Padding="10,4"
+                Click="OnReloadClicked"/>
+        <Button Grid.Column="3" x:Name="HomeButton"     Content="⌂"      Margin="4,0,8,0" Padding="10,4"
+                Click="OnHomeClicked"/>
+
+        <TextBox Grid.Column="4"
+                 x:Name="AddressTextBox"
+                 Watermark="输入网址，回车加载 (默认 https://www.4399.com/)"
+                 Margin="0,0,4,0"
+                 KeyDown="OnAddressKeyDown"/>
+
+        <Button Grid.Column="5" x:Name="GoButton"       Content="Go"    Margin="0,0,4,0" Padding="14,4"
+                Click="OnGoClicked"/>
+        <Button Grid.Column="6" x:Name="DevToolsButton" Content="DevTools" Padding="10,4"
+                Click="OnDevToolsClicked"/>
+      </Grid>
+    </Border>
+
+    <!-- Bottom: status bar -->
+    <Border DockPanel.Dock="Bottom"
+            Padding="8,4"
+            Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}">
+      <TextBlock x:Name="StatusText"
+                 Text="Ready"
+                 FontSize="11"
+                 Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+    </Border>
+
+    <!-- Center: the CEF browser control is attached at runtime -->
+    <Decorator x:Name="BrowserWrapper"/>
+  </DockPanel>
+</Window>
