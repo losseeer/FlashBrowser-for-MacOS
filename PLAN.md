@@ -351,6 +351,143 @@ A：CefGlue 120 依赖 Avalonia 11 的 `Avalonia.ReactiveUI 11.0.9+`，Avalonia 
 
 ---
 
+## 10. 会话交接清单（**新会话读这一段就能开干**）
+
+> 本节是 PLAN.md 的「自包含补丁」——光读 §10 + 附录 A，新会话 agent 也能：
+> - 知道在哪台机器、什么路径、什么约束下开工
+> - 不重复踩「dotnet 没装 / 路径不对 / CEF OOM」等已知坑
+> - 找到上游 SOL 参考、TestData fixture、PIVOT 报告
+
+### 10.1 机器与路径速查
+
+| 项 | 值 |
+|---|---|
+| 工作目录 | `~/Dev/FlashBrowser-for-MacOS/` |
+| 仓库远端 origin | 当前 `losseeer/CefFlashBrowser.git`（**待切换**——见 §10.7） |
+| 仓库远端 upstream | `Mzying2001/CefFlashBrowser.git` |
+| 节点 SDK | 系统 `/opt/homebrew/bin/dotnet` 或 `~/.dotnet/dotnet` |
+| 已发布 .app | `dist-FlashBrowser-for-MacOS.app/`（git tracked） |
+| publish 输出 | `publish/`（gitignored） |
+| 上游 SOL 参考 | `~/Dev/CefFlashBrowser/CefFlashBrowser.Sol/sol.h` + `sol.cpp` |
+| TestData fixtures | `~/Dev/CefFlashBrowser/CefFlashBrowser.Tests/TestData/*.sol` |
+| PIVOT 报告 | `~/WorkBuddy/2026-09-10-14-04-22/research/macos-cefflashbrowser-oss-flash-game-browser/report.md` |
+
+### 10.2 启动命令链
+
+```bash
+# 1. 还原依赖 + 编译
+cd ~/Dev/FlashBrowser-for-MacOS
+dotnet restore
+dotnet build -c Release
+
+# 2. 发布到 ./publish/（gitignored）
+dotnet publish -c Release -r osx-arm64 -o ./publish
+
+# 3. 打 .app bundle（覆盖式，不删 publish/）
+./bundle-mac.sh ./publish
+
+# 4. 启动 GUI
+open ./dist-FlashBrowser-for-MacOS.app
+
+# 5. 看日志（CefGlue 把 console.log 写到 stderr）
+./dist-FlashBrowser-for-MacOS.app/Contents/MacOS/FlashBrowserForMacOS 2>&1 | tee run.log
+```
+
+### 10.3 环境硬约束（**OOM 警告**）
+
+| 指标 | 数值 | 影响 |
+|---|---|---|
+| `vm_stat Pages free` | **~19MB** | CEF 启动 SIGKILL（exit 137，无日志） |
+| 总内存 | 16GB | 当前空闲页框极小 |
+| Rosetta | 不可用 | 必须 `osx-arm64` |
+
+**应对**：
+- **OOM 期间只推进 P1 / P2 的纯 C# 工作**（单元测试不依赖 CEF）
+- OOM 期间 GUI 验证一律跳过，所有「GUI 通断」相关的工作改用「node 层 JS 行为断言 + 单元测试」代替
+- 任何「GUI 启动」步骤执行前**先** `vm_stat | head -10` 确认 free pages > 500MB
+
+### 10.4 命名约定速查
+
+| 维度 | 值 |
+|---|---|
+| 文件夹 / repo | `FlashBrowser-for-MacOS` |
+| .sln / .csproj | `FlashBrowser-for-MacOS.{sln,csproj}` |
+| C# Namespace / Assembly | `FlashBrowserForMacOS`（PascalCase，无横杠） |
+| UI Title | `FlashBrowser for Mac` |
+| CFBundleExecutable | `FlashBrowserForMacOS` |
+| Bundle ID | `io.github.losseeer.flashbrowserformacos`（全小写） |
+| Address bar 默认主页 | `https://www.4399.com/` |
+
+**禁止**：
+- 把 `Cef` 加进项目名（运行时不是 CEF Flash Player，是 Ruffle WASM）
+- 把 namespace 写成 `FlashBrowser-for-MacOS`（C# 不允许横杠）
+
+### 10.5 关键决策的「为什么」（防被面试官追问打穿）
+
+| 决策 | 答案 |
+|---|---|
+| 为什么 Ruffle 而不是 NG Player / Lightspark | Ruffle 是唯一活跃维护的 Flash 仿真器（WASM/Rust），其他三个停更 |
+| 为什么 CefGlue 而不是 WKWebView / WebView2 | 需要 `OnContextCreated` 时机；WKWebView 的 WKUserScript 时机太晚 |
+| 为什么 Avalonia 11 不是 12 | CefGlue 120 依赖 Avalonia.ReactiveUI 11.0.9+ |
+| 为什么 .app bundle 必不可少 | 直接 `dotnet run` 因 Objective-C class duplicate 崩溃 |
+| 为什么 CefGlue.Avalonia.ARM64 而不是普通版 | 默认版拉 x86_64 dylib，Apple Silicon 上要么 Rosetta 要么报错 |
+| 为什么 swfproxy:// 自定义 scheme | sda.4399.com 没 ACAO header，必须服务端代理 + 加 Referer |
+
+### 10.6 已知警告与坑
+
+| 现象 | 原因 | 影响 |
+|---|---|---|
+| `objc: Class ExtensionDropdownHandler is implemented in both libAvaloniaNative.dylib and libcef.dylib` | Avalonia Native + CEF 各自实现了 NSToolbar 一个类 | 不影响基本渲染，深交互偶发崩溃（已记入 README） |
+| `Ruffle instance destroyed` ~100ms 后 | `disconnectedCallback` → `destroy()` | Phase 3b 阻塞，未解 |
+| `Serious error ... reading 'stream_from'` | `this.instance` 在 load() 异步期间被 null | 同上 |
+
+### 10.7 待办中的「脏」状态（**新会话接手必看**）
+
+```bash
+# 当前 origin 仍指向 fork 仓库，需要切换：
+git remote -v
+# origin	https://github.com/losseeer/CefFlashBrowser.git  ← ❌ 错的
+# upstream	https://github.com/Mzying2001/CefFlashBrowser.git
+
+# 修复（在 GitHub 上先创建空 repo: losseeer/FlashBrowser-for-MacOS）：
+git remote set-url origin git@github.com:losseeer/FlashBrowser-for-MacOS.git
+git push -u origin main
+```
+
+### 10.8 验证检查清单（每阶段开始 / 结束跑一遍）
+
+**开始一个阶段前**：
+```bash
+git status          # 确认 working tree clean
+git log --oneline -5 # 确认在 main 分支上
+dotnet build -c Release  # 确认基线 0 warn 0 err
+```
+
+**结束一个阶段后**：
+- [ ] `dotnet build -c Release` 仍 0 warn 0 err（无回归）
+- [ ] 新增的 success criteria 全部勾选（§2 阶段详述里每阶段都有）
+- [ ] 改动至少 1 个 commit，且 commit message 描述了「为什么」+「如何验证」
+- [ ] README 里的对应章节已更新（如果用户可见行为变了）
+- [ ] §4.3 诚实红线检查通过（不夸大 GUI 验证覆盖度）
+
+---
+
+## 11. PLAN.md 自包含性矩阵（新会话接手 checklist）
+
+| 任务类型 | 读完 PLAN.md 够吗？ | 需要额外读什么 |
+|---|---|---|
+| P1 SOL/AMF 单元测试开发 | ✅ 够 | `~/Dev/CefFlashBrowser/CefFlashBrowser.Sol/sol.h`（移植参考） |
+| P2 swfproxy:// + file:// 分支 | ✅ 够 | 无 |
+| P0-1 / P0-2 GUI 验证 | ⚠️ 不够 | §10.2 启动命令链 + §10.3 OOM 检查；**必须在内存恢复时执行** |
+| P3 多 tab | ⚠️ 部分 | §附录 A 关键代码索引 + Avalonia 11 TabControl 文档 |
+| P4 中文站点集成 | ❌ 不足 | 需要每个站点单独抓 HTML 反爬样本 |
+| 命名修改 / 文件夹重构 | ⚠️ 容易遗漏 | §10.4 命名约定速查（7 处统一） |
+| git 仓库结构修复 | ⚠️ 需手动 | §10.7 切换 origin 命令 |
+
+**结论**：P1 / P2 在 OOM 环境**完全可独立推进**；P0 系列必须等内存恢复；P3 / P4 现阶段不建议启动。
+
+---
+
 ## 附录 A · 关键代码索引
 
 | 模块 | 文件 |
