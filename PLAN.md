@@ -8,7 +8,7 @@
 
 ---
 
-## 0. 当前快照（2026-09-10）
+## 0. 当前快照（2026-09-11）
 
 | Phase | 状态 | 关键产物 |
 |---|---|---|
@@ -16,10 +16,10 @@
 | Phase 2 · Ruffle 注入 | ✅ | `ruffle://app/` scheme + `RuffleInjector.BuildInjectionScript()` |
 | Phase 3 · swfproxy + 单实例 | ⚠️ 局部 | `swfproxy://app/load?u=` 跨域代理可用；`main.swf` 加载仍断在 `stream_from null` |
 | Phase 3a · 早期注入（导航 Flash 检测）| ✅ JS | `JavascriptContextCreated` + `navigator.plugins` spoof，已绕过 `flashopen1.js` 的 DOM 干预 |
-| Phase 3b · Player DOM 生命周期 | ❌ 阻塞 | MutationObserver 已埋点，**环境 OOM 无法 GUI 验证**（见 §6 约束） |
+| Phase 3b · Player DOM 生命周期 | ❌ 阻塞 | MutationObserver 已埋点，**环境 OOM 无法 GUI 验证**（见 §6 / §10.3 约束） |
 | Phase 4 · SOL/AMF 存档编辑 | ❌ 未开始 | 计划内 |
 | Phase 5 · 本地 SWF 一键打开 | ❌ 未开始 | 计划内 |
-| 独立 repo + 命名收敛 | ✅ | `bec41be` on `main` (21 files, 1459 insertions)，已 push origin |
+| 独立 repo + 命名收敛 | ✅ | `bec41be` on `main` (21 files, 1459 insertions)，已 push origin；**2026-09-11 补：构建产物已用当前源码重建，`plutil -p` 核对 bundle id = `io.github.losseeer.flashbrowserformacos`（源码侧与产物侧均已收敛）** |
 
 **Phase 3b 是当前唯一硬阻塞**。其余都是「按部就班即可推进」。
 
@@ -60,19 +60,22 @@ Serious error ... reading 'stream_from'  ← this.instance 已 null
 
 | 方案 | 工程做法 | 风险 | 评估 |
 |---|---|---|---|
-| **A. data 路径** | 自己 `HttpClient` 拉 SWF 字节 → `ruffle.load({ data: Uint8Array, parameters })` | 内存峰值 69MB × 2（下载 + 引擎内） | ✅ **推荐**：彻底脱离 DOM 生命周期，与 Phase 3 swfproxy 共用同一个 fetcher |
+| **A. data 路径** | 自己拉 SWF 字节 → `ruffle.load({ data: <Uint8Array>, base: <原 SWF 所在目录>, parameters: flashvars })` | 拉长 CEF IO 线程阻塞（fetcher 目前是**同步**的，见 `SwfProxySchemeHandlerFactory.cs:63-65,71`）。内存**不是** 69MB×2 —— 该文件 `:71` 已经全量常驻 | ✅ **推荐**：彻底脱离 DOM 生命周期，与 Phase 3 swfproxy 共用同一个 fetcher |
 | **B. MutationObserver 反制** | 检测到 player 被移出时**重新挂回原容器** | 4399 脚本持续反挂回会进入死循环 | ⚠️ 可作 A 的临时兜底 |
 | **C. 升级 Ruffle** | 升 0.7+（0.6.0 已知 DOM 生命周期 bug）| API 变化 / asset 重新打包 | 🔁 长期方案，与 A 并行 |
 | **D. 主 frame 拦截** | 注册 `ResourceHandlerFactory` 拦截 `main.swf` 请求，本地回吐 | 与 swfproxy 重复实现 | ❌ 不推荐 |
 
 **关键代码锚点**：
-- `src/FlashBrowser-for-MacOS/Ruffle/RuffleInjector.cs:226-229` — 当前 `loadMainGame` 调 `player.load({ url: proxyUrl })`（**A 方案改成 `{ data: bytes }` 即可**）
-- `src/FlashBrowser-for-MacOS/Ruffle/SwfProxySchemeHandlerFactory.cs` — 现成的服务端 fetcher，可复用
+- `src/FlashBrowser-for-MacOS/Ruffle/RuffleInjector.cs:226-229` — 当前 `loadMainGame` 调 `player.load({ url: proxyUrl })`。**A 方案切 `{ data }` 时两个参数不能丢/必须补**：
+  - `parameters`（flashvars）**已在 `:227` 传入**，切换时照搬即可（`extractFlashvars()` 在 `:163-177`，别让它白做）
+  - `base` **必须补** —— 不传时 Ruffle 把相对路径的资源按 `swfproxy://app/load` 解析，而 `SwfProxySchemeHandlerFactory` 只认 `?u=` 形态（`:80-96`，`IsAllowed` 仅 `http/https`），外链资源会直接失败
+- `src/FlashBrowser-for-MacOS/Ruffle/SwfProxySchemeHandlerFactory.cs` — 现成的服务端 fetcher，可复用（注意它是同步阻塞的，见上表 A 行风险）
 
-**成功判据**（**硬性**，三项任一不满足即不进入 P0-2）：
+**成功判据**（**硬性**，四项任一不满足即不进入 P0-2）：
 1. GUI 启动 → 地址栏输入 `https://www.4399.com/flash/205551_4.htm` → MutationObserver **不再**打印 `ruffle-player REMOVED` 日志（或只出现一次且已被 load() 处理）
 2. console 输出 `Ruffle instance destroyed.` 计数 = 0
 3. 至少 1 个 main.swf 加载后进入游戏画面（不一定是 205551，任一可玩即可）
+4. **`base` 生效验证**：改用 `{ data }` 后，该 SWF 若通过相对路径引外链资源，console **无** 指向 `swfproxy://app/` 的解析失败（对照实验：故意不传 `base` 应能复现失败）
 
 **反例防御（写简历/portfolio 时）**：
 - ❌ 不能写：「4399 完美兼容」「所有 Flash 游戏可玩」
@@ -84,21 +87,24 @@ Serious error ... reading 'stream_from'  ← this.instance 已 null
 
 **目标**：在至少 N 个游戏上完成「点击 → 进入游戏画面 → 操作 30 秒不崩溃」端到端验证。
 
-**用例池**（建议先打 5 个，覆盖「吃 · 喝 · 玩 · 乐」+ 一类异常）：
+**用例池**（建议先打 5 个，覆盖 4 类交互维度 + 1 类异常）：
 
-| ID | URL | 类别 | 验证要点 |
-|---|---|---|---|
-| T1 | `/flash/205551_4.htm` | 玩（横版动作）| 验证 swfproxy + data 路径 |
-| T2 | `/flash/<棋牌小游戏>` | 玩 | 验证 flashvars 传递 |
-| T3 | `/flash/<模拟经营>` | 玩 | 验证 SharedObject / 存档 |
-| T4 | `/flash/<解密类>` | 玩 | 验证键盘事件透传 |
-| T5 | `/flash/<loading 超 30s 的>` | 异常 | 验证进度反馈 / 超时 |
+| ID | 游戏（4399 官方条目）| URL | 验证维度 | 验证要点 |
+|---|---|---|---|---|
+| T1 | 死神VS火影3.3 | `/flash/205551_4.htm` | 加载链路 | swfproxy + data 路径（横版动作）|
+| T2 | 全民斗地主 | `/flash/117945.htm` | flashvars | 页面参数是否正确注入 SWF |
+| T3 | 植物大战僵尸 | `/flash/18012.htm` | SharedObject | 本地存档读写（与 Phase 4 衔接）|
+| T4 | 爆枪突击 | `/flash/130396.htm` | 键盘事件 | WASD / 方向键是否透传到 Ruffle |
+| T5 | 候选，执行时选定 | 见注 ② | 异常 / 超时 | 加载耗时 > 30s 时给进度反馈，不静默卡死 |
+
+> ① **URL 来源**：T1–T4 取自 4399 官方分类页的真实条目（`/flash_fl/{2,4,7,8}_1.htm`），页面可达性已验证（HTTP 200，2026-09-11）。**SWF 实际可玩性未验证** —— 需在 P0-2 用 GUI 实测确认（受 §10.3 swap 约束，只能在 OOM 窗口外执行）。
+> ② **T5 不是固定 URL**：其触发条件是「实测加载耗时 > 30s」，执行 P0-2 时从资源量最大的用例（或另选大型 3D 游戏）中选定，并记录其 SWF 体积与实测加载耗时。
 
 **成功判据**：
 - T1–T4 全部「进游戏画面 + 30s 不崩溃」
 - T5 给出明确的超时行为（不静默卡死）
 
-**面试话术**：「接入真实站点 5 个游戏做端到端验证」—— 这是比「100 个游戏支持」更可信的表述。
+**面试话术**：「接入 4399 真实站点、5 个用例做端到端 GUI 验证」—— 这是比「100 个游戏支持」更可信的表述。
 
 ---
 
@@ -117,23 +123,71 @@ Serious error ... reading 'stream_from'  ← this.instance 已 null
 
 | 子阶段 | 内容 | 验证 |
 |---|---|---|
-| P1.1 | `Models/SolFile.cs` + `Sol/Amf0Reader.cs`（AMF0 解析） | 单元测试：解 5 个 fixture，与 hex dump 一致 |
-| P1.2 | `Sol/Amf3Reader.cs`（AMF3 解析） | 单元测试同上 |
+| **P1.0** | **新建 `FlashBrowserForMacOS.Tests` 工程（xunit，`net8.0`）+ 把 4 个上游 fixture 拷进 `Tests/TestData/`** | `dotnet test` 能跑起来 → 从此 `dotnet test` 进入 §4.1 硬判据 |
+| P1.1 | `Models/SolFile.cs` + `Sol/Amf0Reader.cs`（AMF0 解析） | 单元测试：解**上游唯一 1 个** AMF0 fixture（`settings.sol`, 845 B）|
+| P1.2 | `Sol/Amf3Reader.cs`（AMF3 解析） | 单元测试：解上游 **3 个** AMF3 fixture |
 | P1.3 | `Sol/SolWriter.cs`（写回） | round-trip：解 → 写 → 解，内容相等 |
 | P1.4 | Avalonia UI：表格视图 + 字段编辑 | GUI：打开 .sol 看字段、改字段、保存 |
-| P1.5 | Ruffle 存档路径识别 | 自动定位 `~/Library/Application Support/Ruffle/*.sol#sharedobjects` |
+| P1.5 | **存档定位（前置调查见下）** | 见「P1.5 前置调查」 |
+
+**为什么必须有 P1.0**：`.sln` 目前只有 1 个工程（`git ls-files` 无 Tests 目录），而 P1 的核心判据是**单元测试 + round-trip** —— 没有测试工程，整条 P1 判据无法执行。
+
+**Fixture 清单（实测，2026-09-11）**：
+
+| fixture | 大小 | 格式 | 来源 |
+|---|---|---|---|
+| `settings.sol` | 845 B | **AMF0** | `~/Dev/CefFlashBrowser/CefFlashBrowser.Tests/TestData/` |
+| `FBCookie.sol` | 269 B | AMF3 | 同上 |
+| `pvz.sol` | 95 B | AMF3 | 同上 |
+| `mao.sol` | 34 B | AMF3 | 同上 |
+
+> 解析口径：LSO 头 = `00 BF` + `u32` 长度 + `"TCSO" 00 04 00 00 00 00` + `u16` 名字长度 + 名字 + 3 B padding + **1 B 版本（`0x00`=AMF0 / `0x03`=AMF3）**。
+> ⚠️ **「AMF0 / AMF3 各半」不可写进判据** —— 上游只有 4 个 fixture、其中 AMF0 仅 1 个。AMF0 的**边界**（长字符串 / ECMA array / Date / 对象引用）若要覆盖，得自造 fixture 或从 Flash Player 6–8 时代的内容导出 —— 那是**额外任务**，不是既有资产。
 
 **风险点**：
 - AMF3 引用对象（`ObjectTraits` / `StringReference`）容易写错——**先做 round-trip 测试再写 UI**
 - 大存档（>10MB）需要流式解析，不能一次 `ToArray()`——但 4399 实际存档通常 < 1MB，先按这个假设
+- **AMF0 覆盖面过窄**（只有 1 个 fixture）→ 别用「AMF0 已完整支持」这类措辞
 
 **成功判据**：
-- ✅ 解 10 个 fixture 全部正确（含 AMF0 / AMF3 各半）
+- ✅ 解**全部 4 个**上游 fixture 正确（AMF0×1 + AMF3×3，清单见上）
 - ✅ round-trip 测试 0 误差
-- ✅ GUI 打开一个 4399 真实 .sol 能看见字段
+- ✅ GUI 打开一个真实 .sol 能看见字段（**注意**：见下方「P1.5 前置调查」——「本应用产生的 .sol」并不存在）
+
+**P1.5 前置调查：Ruffle 存档到底在哪（2026-09-11 实测，改变了 P1 的前提）**
+
+**关键结论：本应用内嵌的 Ruffle 不产生任何 `.sol` 文件。**
+
+| 证据 | 位置 |
+|---|---|
+| 内嵌的是 Ruffle **web/WASM** 构建（不是桌面版）| `src/FlashBrowser-for-MacOS/Assets/Ruffle/core.ruffle.*.wasm` |
+| 其存储后端是 `ruffle_web::storage::LocalStorageBackend`（wasm 符号实测）→ 写**浏览器 localStorage**，不是文件 | `strings` 扫 `core.ruffle.*.wasm` 可命中该符号 |
+| CEF profile 被设为**每次启动唯一的临时目录** | `Program.cs:20-22`（`Path.GetTempPath()/FlashBrowserForMacOS_<GUID>`）|
+| 退出时**递归删除整个 profile** | `Program.cs:24`（注册 `ProcessExit`）→ `Program.cs:83-86`（`Directory.Delete(recursive: true)`）|
+
+⇒ **游戏存档在每次退出时被清空、每次启动都从零开始。** 这不只是 P1 的前提问题，也是 P0-2 的验证陷阱：**依赖存档的游戏会表现成「首次运行」**（例如关卡进度、设置项），别把它误判成加载失败。
+
+因此 P1.5「自动定位」的对象只能是**别家运行时**产生的 `.sol`：
+
+| 来源 | 路径（macOS）| 实测状态 |
+|---|---|---|
+| Ruffle 桌面版（沙箱/公证构建）| `~/Library/Containers/rs.ruffle.ruffle/Data/Library/Application Support/ruffle/SharedObjects/<domain>/<path>/<name>.sol` | 本机未安装，**未实测** |
+| Ruffle 桌面版（非沙箱）| `~/Library/Application Support/ruffle/SharedObjects/<domain>/<path>/<name>.sol` | 本机未安装，**未实测** |
+| Flash Player 遗留 | `~/Library/Preferences/Macromedia/Flash Player/#SharedObjects/<domain>/<path>/<name>.sol` | **未实测** |
+
+> **原路径两处都写反了**：`…/Ruffle/*.sol#sharedobjects` —— ① 目录名是小写 `ruffle`，不是 `Ruffle`；② Ruffle 用**真实嵌套目录** `SharedObjects/<domain>/<path>/<name>.sol`，而 `#SharedObjects` 这种 `#` 连接命名是 **Flash Player** 的风格（`…#SharedObjects\<domain>\<path>\<name>.sol`），两者不是一回事。
+> 依据：ruffle-rs/ruffle discussions **#15177** / **#3816**（`dirs::data_local_dir` + 沙箱路径示例）。**上表三条路径均需在本机 `ls` 实测后才能写进判据。**
+
+**要真做「编辑本应用存档」，得先改一个前置条件**（三选一，**属设计决策，未定**）：
+
+1. **持久化 CEF profile** —— 把 `RootCachePath` 从 GUID 临时目录改为固定路径（如 `~/Library/Application Support/FlashBrowserForMacOS/cef`），并去掉「退出即删」。之后还要从 CEF 的 localStorage LevelDB 取 SharedObject 条目 —— **需要另写 LevelDB 读取，上面那套 `.sol` 解析器不适用**（存的是 localStorage 键值，不是 `.sol` 文件）。
+2. **做导入/导出而不是直接编辑** —— UI 内提供「导出当前存档 → `.sol`」「导入 `.sol` → localStorage」，绕开 LevelDB 格式（但同样依赖 1 的 profile 持久化才有意义）。
+3. **只做离线文件工具** —— 把 P1 定位成「独立的 `.sol` 解析 / 编辑 / 互转工具」，不碰本应用运行时。**与 §6.2「P1 不需要 GUI」天然一致，也是三者里最短路径。**
+
+> **顺带修正一处措辞**：Flash Player / Ruffle / Flashpoint **用的是同一个容器格式**（LSO = `.sol` = AMF0/AMF3），差别只在**存储目录布局**与 AMF 版本。所以正确说法是「自动定位并互认各运行时的存档目录」，**不是**「三方格式互转」——后者会被面试官追问「三者格式哪里不同」而穿帮。
 
 **简历措辞参考**：
-> 「独立实现 AMF0 / AMF3 双向解析器（round-trip 0 误差），并搭建 Avalonia 图形化编辑界面，实现 Ruffle / Flashpoint / 原版三方存档兼容」
+> 「独立实现 LSO(`.sol`) 容器 + AMF0/AMF3 双向解析器（round-trip 0 误差），并搭建 Avalonia 图形化存档编辑界面；支持 Flash Player / Ruffle / Flashpoint 各运行时存档目录的自动定位与互认」
 
 ---
 
@@ -206,19 +260,16 @@ RuffleInjector.BuildLocalLoadScript() → 仅调 player.load({ url: proxyUrl })
 ## 3. 阶段依赖图
 
 ```
-Phase 3b (P0-1)
-    ↓
-P0-2 (可玩验证)
-    ↓
-    ├──→ P1 (SOL/AMF)        ← 不依赖 P0-2，可并行启动
-    ├──→ P2 (本地 SWF)        ← 不依赖 P0-2，可并行启动
-    │
-    └──→ P3 (多 tab)
-            ↓
-            P4 (多站点)
+主线（依赖 GUI 验证）:
+    Phase 3b (P0-1) ──→ P0-2 (可玩验证) ──→ P3 (多 tab) ──→ P4 (多站点)
+
+并行线（不依赖 P0-2，可立即开工）:
+    P1.0 (Tests 工程) ──→ P1 (SOL/AMF 解析 + round-trip) ──┐
+    P2 (本地 SWF: file:// 分支 + 拖放) ────────────────────┴──→ MVP 收口 = P0-1+P0-2+P1+P2
 ```
 
-**关键洞见**：P1 / P2 **不需要** P0-2 验证完成，因为它们与 Ruffle 加载主链路解耦（SOL 是后处理，本地 SWF 是入口前置）。**P1 / P2 可在当前环境（OOM）直接开发并跑单元测试**。
+**关键洞见**：P1 / P2 **不需要** P0-2 验证完成 —— SOL 是后处理、本地 SWF 是入口前置，两者都与加载主链路解耦。
+**可开工性**：P1.0 / P1 是**纯 C#**，在当前 OOM 环境下可立即开发并跑 `dotnet test`；P2 的 `file://` 分支也可用 curl 单测 —— 只有 P2.2 / P2.3 的「进游戏画面」「拖放」两步需要 GUI。
 
 ---
 
@@ -231,6 +282,7 @@ P0-2 (可玩验证)
 | 类型 | 例子 |
 |---|---|
 | **编译通过** | `dotnet build` 0 warn 0 err |
+| **测试通过** | `dotnet test` 全绿（**P1.0 引入测试工程后生效**；此前无测试工程，此项为空）|
 | **不破坏已有** | 已有用例 T1 仍可玩（regression） |
 | **新能力可见** | MutationObserver 日志 / 单元测试 / GUI 截图 |
 
@@ -247,9 +299,11 @@ P0-2 (可玩验证)
 | 红线 | 反例措辞 | 正确措辞 |
 |---|---|---|
 | 没有 GUI 验证就说「完美兼容」| "完美支持 4399 全站" | "打通 4399 Flash 游戏加载链路，N 个真实用例 GUI 验证通过" |
-| 把 ablation / ablation study 套用过来 | "ablation 后提升 X%" | 这是 ablation，不适用；改写「with/without SOL 对照实验」 |
-| 把 self_improve 写成已上线 | "Agent 自演进已部署" | "预留自演进扩展点，当前静态" |
-| 把「理论占位」写成「已实现」 | "self_improve.py 已上线" | "self_improve.py 为理论占位，生产链路不调用" |
+| 用 1 个用例外推到全站 | "已支持全站 Flash 游戏" | 写清实测通过的用例数（T1–T4）与站点，不做外推 |
+| 把计划内未开工的 Phase 写成已实现 | "支持 SOL/AMF 存档编辑、三方格式互转" | Phase 4/5 未开工 → 写「规划中」，不写「已支持」 |
+| 把已定位但未闭环的 bug 说成已修复 | "已解决 Ruffle 实例被销毁问题" | "已定位根因（DOM 生命周期 + 早期注入），Phase 3b 未闭环" |
+| 引用未实测的性能数字 | "启动 < 3s、内存峰值 < 500MB" | 属 §4.2 软判据，未实测前不写具体数值 |
+| 把上游产物身份说成自己的 | bundle 里留着 `com.Mzying2001.*` 却宣称「独立实现」 | 交付前 `plutil -p` 核验 bundle id，产物身份必须与声明一致（见 §10.2）|
 
 > ⚠️ **诚实红线适用所有阶段**。每完成一阶段写 commit message / README 时先过这道红线条。
 
@@ -289,11 +343,16 @@ A：CefGlue 120 依赖 Avalonia 11 的 `Avalonia.ReactiveUI 11.0.9+`，Avalonia 
 
 ### 6.1 当前硬约束
 
-| 约束 | 数值 | 影响 |
+| 约束 | 数值（2026-09-11 实测） | 影响 |
 |---|---|---|
-| `Pages free` | ~19MB | CEF 启动 SIGKILL（exit 137） |
+| `vm_stat` `Pages free` | **4.3k–27.4k pages（≈68–428MB，分钟级剧烈波动）** | 单看 free pages 会误判；CEF 启动 SIGKILL（exit 137） |
+| **`sysctl vm.swapusage` free** | **322–363MB**（total 11.0GB / used ≈10.9GB） | **这才是 SIGKILL(137) 的直接原因** —— swap 也接近耗尽，内核无处换页，日志 0 行 |
 | 总内存 | 16GB | 当前空闲页框极小 |
 | Rosetta | 不可用 | 必须 ARM64 原生 CEF |
+
+> ⚠️ **判据必须两条一起看**：`Pages free` 与 `swap free`。
+> 早期只盯 `Pages free`（记成「~19MB」）导致把「swap 耗尽」误诊为「空闲内存不足」，
+> 检查方式也随之写错（只跑 `vm_stat`）。
 
 ### 6.2 应对策略
 
@@ -316,8 +375,9 @@ A：CefGlue 120 依赖 Avalonia 11 的 `Avalonia.ReactiveUI 11.0.9+`，Avalonia 
 |---|---|---|---|
 | P0-1 | `MainWindow.axaml.cs` + `RuffleInjector.cs` 修改 | README §Phase 3 补完 | — |
 | P0-2 | — | README §可玩游戏清单 + 截图 | 截图 / 录屏 |
-| P1 | `Sol/` 全套（6 文件）+ 单元测试 + UI | README §SOL 编辑 + 用户指南 | 「SOL 编辑器」演示 |
-| P2 | `SwfProxySchemeHandlerFactory.cs` + Avalonia 拖放 | README §本地 SWF | 「拖 SWF 即玩」录屏 |
+| **P1.0** | `FlashBrowserForMacOS.Tests` 工程（xunit）+ `Tests/TestData/` 4 个 fixture | — | `dotnet test` 输出 |
+| P1 | `Sol/` 全套（6 文件）+ UI + **测试工程内的用例** | README §SOL 编辑 + 用户指南 | 「SOL 编辑器」演示 |
+| P2 | `SwfProxySchemeHandlerFactory.cs` + Avalonia 拖放 + **`bundle-mac.sh`**（P2.4 的 `.swf` UTI 只能改它 —— 它是 Info.plist 的**唯一生成者**）| README §本地 SWF | 「拖 SWF 即玩」录屏 |
 | P3 | tab/bookmark/history | README §功能 | — |
 
 ---
@@ -326,28 +386,33 @@ A：CefGlue 120 依赖 Avalonia 11 的 `Avalonia.ReactiveUI 11.0.9+`，Avalonia 
 
 | 阶段 | 人天（单人）| 说明 |
 |---|---|---|
-| P0-1 | 1–2 | 改 load 路径 + 单元测试 + GUI 验证 |
-| P0-2 | 1 | 5 个游戏跑通 |
+| P0-1 | 1–2 | 改 load 路径（含 `base`）+ 单元测试 + GUI 验证 |
+| P0-2 | 1 | 5 个用例跑通 |
+| **P1.0** | **0.5** | **建 Tests 工程 + 拷 4 个 fixture（前置，否则 P1 无法验收）** |
 | P1 | 3–4 | AMF0/3 解析 + round-trip + UI |
 | P2 | 1–2 | swfproxy 扩 file:// + Avalonia 拖放 |
 | P3 | 2 | tab / bookmark / history |
 | P4 | 1 | 7k7k 一个站点 |
 
-**最小可发布版本（MVP）= P0-1 + P0-2 + P1 + P2**，约 6–9 人天。这是 portfolio 叙事最划算的边界。
+**最小可发布版本（MVP）= P0-1 + P0-2 + P1.0 + P1 + P2**，约 6.5–9.5 人天。这是 portfolio 叙事最划算的边界。
 
 ---
 
 ## 9. 关闭条件（如何判断项目「可发布」）
 
-满足**全部**：
+**硬条件（全部满足才算「可发布」）**：
 
 - [ ] P0-1：Player 不再被移除的 MutationObserver 日志佐证
-- [ ] P0-2：5 个 4399 游戏 end-to-end 可玩
-- [ ] P1：SOL 编辑器 GUI 可用 + round-trip 0 误差
+- [ ] P0-2：5 个 4399 用例 end-to-end 可玩（清单见 §2 P0-2）
+- [ ] P1.0：`dotnet test` 可运行（测试工程已存在）
+- [ ] P1：SOL 编辑器 GUI 可用 + `dotnet test` 里 round-trip 0 误差
 - [ ] P2：本地 SWF 拖放可玩
-- [ ] README 诚实红线检查通过
-- [ ] LICENSE 选定（MIT 优先）
-- [ ] CI（可选）：`dotnet build -c Release -r osx-arm64` 0 错误
+- [ ] README 诚实红线检查通过（§4.3）
+
+**软条件（建议，不阻塞本地开发）**：
+
+- [ ] LICENSE 选定（MIT 优先）—— **本地开发不阻塞，但「放上 GitHub Releases / 公开分发」前必须补**；仓库当前**无 LICENSE 文件**，届时等于未授权分发
+- [ ] CI：`dotnet build -c Release -r osx-arm64` 0 错误（本地已 0 warn 0 err，CI 只是固化该判据）
 
 ---
 
@@ -365,46 +430,77 @@ A：CefGlue 120 依赖 Avalonia 11 的 `Avalonia.ReactiveUI 11.0.9+`，Avalonia 
 | 工作目录 | `~/Dev/FlashBrowser-for-MacOS/` |
 | 仓库远端 origin | `https://github.com/losseeer/FlashBrowser-for-MacOS.git` ✅（2026-09-10 已切换） |
 | 仓库远端 upstream | 已移除（独立 repo 不再保留上游引用）|
-| 节点 SDK | 系统 `/opt/homebrew/bin/dotnet` 或 `~/.dotnet/dotnet` |
-| 已发布 .app | `dist-FlashBrowser-for-MacOS.app/`（git tracked） |
+| .NET SDK | **`~/.dotnet/dotnet`（SDK 8.0.425）。`/opt/homebrew/bin/dotnet` 不存在；`~/.dotnet` 不在 PATH** → 用前先 `export PATH="$HOME/.dotnet:$PATH"` |
+| 已发布 .app | `dist-FlashBrowser-for-MacOS.app/`（**gitignored —— 仓库不含二进制**；2026-09-11 已用当前源码重建，`plutil -p` 核对过 bundle id） |
 | publish 输出 | `publish/`（gitignored） |
+| 构建产物是否进 git | **否** —— `.gitignore` 忽略 `*.app/` 与 `publish/`。`git ls-files` 仅 22 个文件（源码 + 文档）。**新 clone 必须自己跑 §10.2 才有可执行产物** |
 | 上游 SOL 参考 | `~/Dev/CefFlashBrowser/CefFlashBrowser.Sol/sol.h` + `sol.cpp` |
-| TestData fixtures | `~/Dev/CefFlashBrowser/CefFlashBrowser.Tests/TestData/*.sol` |
+| TestData fixtures | `~/Dev/CefFlashBrowser/CefFlashBrowser.Tests/TestData/*.sol`（实测：4 个） |
 | PIVOT 报告 | `~/WorkBuddy/2026-09-10-14-04-22/research/macos-cefflashbrowser-oss-flash-game-browser/report.md` |
 
 ### 10.2 启动命令链
 
 ```bash
-# 1. 还原依赖 + 编译
+# 0. dotnet 不在 PATH（SDK 8.0.425 装在 ~/.dotnet）—— 每条新 shell 都要先导出
+export PATH="$HOME/.dotnet:$PATH"
+
+# 1. 还原依赖 + 编译（在仓库根执行 OK；基线 0 warn 0 err）
 cd ~/Dev/FlashBrowser-for-MacOS
 dotnet restore
 dotnet build -c Release
 
 # 2. 发布到 ./publish/（gitignored）
-dotnet publish -c Release -r osx-arm64 -o ./publish
+#    ⚠️ 不要在仓库根跑 publish —— 根目录有 .sln，-o 会触发 NETSDK1194
+cd src/FlashBrowser-for-MacOS
+dotnet publish -c Release -r osx-arm64 -o ../../publish
+cd ~/Dev/FlashBrowser-for-MacOS
 
-# 3. 打 .app bundle（覆盖式，不删 publish/）
+# 3. 打 .app bundle（默认输出 ./dist-FlashBrowser-for-MacOS.app，与本文档引用一致）
 ./bundle-mac.sh ./publish
 
-# 4. 启动 GUI
+# 4. 校验 bundle 身份（改名 / 重建后**必跑**）
+plutil -p ./dist-FlashBrowser-for-MacOS.app/Contents/Info.plist \
+  | grep -E 'CFBundleExecutable|CFBundleIdentifier'
+# 期望：CFBundleExecutable => "FlashBrowserForMacOS"
+#       CFBundleIdentifier => "io.github.losseeer.flashbrowserformacos"
+# 反例：出现 CefFlashBrowser / com.Mzying2001.* → 产物是旧名残留，见 §10.6
+
+# 5. 启动 GUI（先过 §10.3 的内存准入检查）
 open ./dist-FlashBrowser-for-MacOS.app
 
-# 5. 看日志（CefGlue 把 console.log 写到 stderr）
+# 6. 看日志（CefGlue 把 console.log 写到 stderr）
 ./dist-FlashBrowser-for-MacOS.app/Contents/MacOS/FlashBrowserForMacOS 2>&1 | tee run.log
 ```
 
+**两个已实测的坑**：
+
+- **批量删除保护**：`rm -rf publish` 与 `CLEAN=1 ./bundle-mac.sh` 都会被安全守卫拦截（>50 文件）。
+  要清干净就改用可恢复的方式：`mv publish ~/.Trash/publish.$(date +%Y%m%d-%H%M%S)`，再重新 publish。
+- **`dotnet publish -o <dir>` 是叠加式写入**，不会清理上一次发布留下的文件。
+  `bundle-mac.sh` 已内置「旧 apphost 残留」检测并打印 WARN（见 §10.6）。
+
 ### 10.3 环境硬约束（**OOM 警告**）
 
-| 指标 | 数值 | 影响 |
+| 指标 | 数值（2026-09-11 实测） | 影响 |
 |---|---|---|
-| `vm_stat Pages free` | **~19MB** | CEF 启动 SIGKILL（exit 137，无日志） |
+| `vm_stat` `Pages free` | 4.3k–27.4k pages（**≈68–428MB，分钟级剧烈波动**） | CEF 启动 SIGKILL（exit 137，无日志） |
+| **`sysctl vm.swapusage` free** | **322–363MB**（total 11.0GB / used ≈10.9GB） | **swap 近耗尽 —— SIGKILL 的直接原因** |
 | 总内存 | 16GB | 当前空闲页框极小 |
 | Rosetta | 不可用 | 必须 `osx-arm64` |
 
 **应对**：
 - **OOM 期间只推进 P1 / P2 的纯 C# 工作**（单元测试不依赖 CEF）
 - OOM 期间 GUI 验证一律跳过，所有「GUI 通断」相关的工作改用「node 层 JS 行为断言 + 单元测试」代替
-- 任何「GUI 启动」步骤执行前**先** `vm_stat | head -10` 确认 free pages > 500MB
+- 任何「GUI 启动」步骤执行前**先跑这两条**，**两条都满足**才动手：
+
+  ```bash
+  vm_stat | head -6                 # 要求 Pages free ≥ ~31k（≈500MB）
+  sysctl vm.swapusage               # 要求 free ≥ ~1GB
+  ```
+
+  > 只满足其一不足以判定。历史误判成因：只跑 `vm_stat` 并把 `Pages free` 记成固定「~19MB」，
+  > 于是漏掉了真正卡住 GUI 的 swap 耗尽。`Pages free` 会随其它进程在几十秒内从 428MB 掉到 68MB，
+  > **必须在真正执行 `open` 之前的那一次测量才有意义**。
 
 ### 10.4 命名约定速查
 
@@ -417,6 +513,7 @@ open ./dist-FlashBrowser-for-MacOS.app
 | CFBundleExecutable | `FlashBrowserForMacOS` |
 | Bundle ID | `io.github.losseeer.flashbrowserformacos`（全小写） |
 | Address bar 默认主页 | `https://www.4399.com/` |
+| RuntimeIdentifier | 默认 **`osx-arm64`**（`csproj:13`）。`csproj:12` 的 `RuntimeIdentifiers` 另列 `osx-x64` **仅为 future-proof 占位**，发布 / CI 一律 `-r osx-arm64`（Rosetta 不可用，见 §6.1）|
 
 **禁止**：
 - 把 `Cef` 加进项目名（运行时不是 CEF Flash Player，是 Ruffle WASM）
@@ -440,6 +537,8 @@ open ./dist-FlashBrowser-for-MacOS.app
 | `objc: Class ExtensionDropdownHandler is implemented in both libAvaloniaNative.dylib and libcef.dylib` | Avalonia Native + CEF 各自实现了 NSToolbar 一个类 | 不影响基本渲染，深交互偶发崩溃（已记入 README） |
 | `Ruffle instance destroyed` ~100ms 后 | `disconnectedCallback` → `destroy()` | Phase 3b 阻塞，未解 |
 | `Serious error ... reading 'stream_from'` | `this.instance` 在 load() 异步期间被 null | 同上 |
+| `warning NETSDK1194: The "--output" option isn't supported when building a solution` | 在**仓库根**跑 `dotnet publish -o`，根目录有 `.sln` | 仅警告不失败，但多工程会输出到同一目录；改为 `cd src/FlashBrowser-for-MacOS` 后再 publish（见 §10.2 第 2 步） |
+| bundle 内 `Info.plist` 仍是旧身份（`CFBundleIdentifier=com.Mzying2001.CefFlashBrowser.Mac`） | ① 改名只做了手工 `mv`，没重新 bundle；② `dotnet publish -o` 叠加式写入，旧 apphost 留在 publish 里一起被打包 | 产物与「非 fork」的定位自相矛盾。已于 2026-09-11 重建修正；`bundle-mac.sh` 现内置旧 apphost 残留 WARN，重建后按 §10.2 第 4 步校验 |
 
 ### 10.7 git 仓库当前状态（**2026-09-10 已修正**）
 
@@ -491,13 +590,13 @@ dotnet build -c Release  # 确认基线 0 warn 0 err
 
 | 模块 | 文件 |
 |---|---|
-| CEF 初始化 | `src/FlashBrowser-for-MacOS/Program.cs:17-32` |
+| CEF 初始化 | `src/FlashBrowser-for-MacOS/Program.cs:28-65`（`CefRuntimeLoader.Initialize` + **两个 CustomScheme 注册**）；`Main` 与 cachePath 在 `:18-22`；退出清理在 `:71-89` |
 | 主窗口 | `src/FlashBrowser-for-MacOS/MainWindow.axaml.cs:21-39` |
 | 早期注入事件 | `src/FlashBrowser-for-MacOS/MainWindow.axaml.cs:120-133` |
 | 注入脚本（后期）| `src/FlashBrowser-for-MacOS/Ruffle/RuffleInjector.cs:133-255` |
 | 注入脚本（早期）| `src/FlashBrowser-for-MacOS/Ruffle/RuffleInjector.cs:57-128` |
-| SWF 跨域代理 | `src/FlashBrowser-for-MacOS/Ruffle/SwfProxySchemeHandlerFactory.cs` |
-| Ruffle 资源供给 | `src/FlashBrowser-for-MacOS/Ruffle/RuffleSchemeHandlerFactory.cs` |
+| SWF 跨域代理 | `src/FlashBrowser-for-MacOS/Ruffle/SwfProxySchemeHandlerFactory.cs`（在 `Program.cs:54-64` 注册）|
+| Ruffle 资源供给 | `src/FlashBrowser-for-MacOS/Ruffle/RuffleSchemeHandlerFactory.cs`（在 `Program.cs:41-51` 注册）|
 | .app 打包 | `bundle-mac.sh` |
 | 已构建产物 | `dist-FlashBrowser-for-MacOS.app/` |
 

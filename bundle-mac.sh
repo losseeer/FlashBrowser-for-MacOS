@@ -15,8 +15,16 @@ set -euo pipefail
 
 # ---- args ----
 PUBLISH_DIR="${1:-./bin/Release/net8.0/osx-arm64/publish}"
+# APP_NAME is the executable / assembly name: C# forbids hyphens, so it is
+# PascalCase. Keep it in sync with FlashBrowser-for-MacOS.csproj (<AssemblyName>).
 APP_NAME="${APP_NAME:-FlashBrowserForMacOS}"
-APP_BUNDLE="${APP_BUNDLE:-./dist-${APP_NAME}.app}"
+# APP_BASENAME is the human-facing name (repo name, bundle dir name) and DOES
+# contain hyphens. Deriving the bundle path from APP_NAME would emit
+# ./dist-FlashBrowserForMacOS.app — a second, parallel bundle that the docs
+# (README / PLAN.md §10.2) never point at. Keep the canonical hyphenated name
+# so a rebuild always overwrites the bundle the docs reference.
+APP_BASENAME="${APP_BASENAME:-FlashBrowser-for-MacOS}"
+APP_BUNDLE="${APP_BUNDLE:-./dist-${APP_BASENAME}.app}"
 APP_ID="${APP_ID:-io.github.losseeer.flashbrowserformacos}"
 VERSION="${VERSION:-0.1.0}"
 
@@ -29,6 +37,22 @@ fi
 if [ ! -f "$PUBLISH_DIR/$APP_NAME" ]; then
     echo "ERROR: expected launcher binary not found: $PUBLISH_DIR/$APP_NAME" >&2
     exit 1
+fi
+
+# ---- stale-artifact guard ----
+# `dotnet publish -o <dir>` overlays: it never removes files from an earlier
+# publish. After a project rename, the old apphost (e.g. CefFlashBrowser.MacOS)
+# therefore survives in the publish dir and ends up inside the bundle, where
+# `plutil -p` will happily report the OLD identity. Detect it instead of
+# shipping two apphosts.
+STALE=$(find "$PUBLISH_DIR" -maxdepth 1 -name '*.runtimeconfig.json' \
+        ! -name "${APP_NAME}.runtimeconfig.json" -exec basename {} .runtimeconfig.json \; \
+        | sort || true)
+if [ -n "$STALE" ]; then
+    echo "WARN: publish dir holds foreign apphost(s) from an earlier project name:" >&2
+    printf '  - %s\n' $STALE >&2
+    echo "      Bundle target may be internally inconsistent. For a clean build:" >&2
+    echo "        rm -rf \"$PUBLISH_DIR\" && dotnet publish -c Release -r osx-arm64 -o \"$PUBLISH_DIR\"" >&2
 fi
 
 # ---- layout ----

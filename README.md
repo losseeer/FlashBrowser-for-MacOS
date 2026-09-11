@@ -148,14 +148,46 @@ cd ../..
 open ./dist-FlashBrowser-for-MacOS.app
 ```
 
+> ⚠️ **不要从仓库根目录执行 `dotnet publish -o <dir>`** —— 根目录存在 `.sln`，
+> 会触发 `NETSDK1194`（solution-level `--output` 不受支持，且可能把多个工程的产物混到同一目录）。
+> 上面的写法先 `cd src/FlashBrowser-for-MacOS`，再用 `-o ../../publish` 把输出指回仓库根。
+>
+> 若 `dotnet` 不在 PATH：`export PATH="$HOME/.dotnet:$PATH"`（见上方「前置」）。
+>
+> `open` 需要足够的可用内存。本机在 swap 紧张时 CEF 会被 SIGKILL（exit 137，日志为空）——
+> 启动前建议先跑 `vm_stat | head -6` 与 `sysctl vm.swapusage` 确认。
+
 ### 已验证产物
 
-仓库根目录 `dist-FlashBrowser-for-MacOS.app/` 是已构建好的可运行 `.app`：
-- `Contents/MacOS/FlashBrowserForMacOS` — 启动器
-- `Contents/MacOS/libcef.dylib` (177MB)、`libAvaloniaNative.dylib`、`libGLESv2.dylib` 等
-- `Contents/MacOS/Resources/` — CEF 所有资源文件（icudtl.dat / v8 snapshot / pak / Info.plist）
-- `Contents/MacOS/CefGlueBrowserProcess/` — CEF 子进程（subprocess launcher）
-- `Contents/Info.plist` — 标准 macOS bundle manifest
+本机最近一次构建（2026-09-11）产出的 `dist-FlashBrowser-for-MacOS.app/`（448MB）：
+
+| 路径 | 内容 |
+|---|---|
+| `Contents/MacOS/FlashBrowserForMacOS` | 启动器（arm64 Mach-O，124KB） |
+| `Contents/MacOS/libcef.dylib` | CEF 原生库（176MB），以及 `libAvaloniaNative.dylib`、`libGLESv2.dylib` 等 |
+| `Contents/MacOS/Resources/` | CEF 资源（`icudtl.dat` / `v8_context_snapshot.arm64.bin` / `*.pak`，含 CEF 自带的 `Info.plist`） |
+| `Contents/MacOS/CefGlueBrowserProcess/` | CEF 子进程（subprocess launcher） |
+| `Contents/MacOS/Assets/Ruffle/` | Ruffle 0.6.0 资源（`ruffle.js` + `core.ruffle.*.js` ×2 + `*.wasm` ×2） |
+| `Contents/Info.plist` | 标准 macOS bundle manifest（由 `bundle-mac.sh` 生成） |
+
+> ⚠️ **`*.app` 与 `publish/` 都在 `.gitignore` 中 —— 仓库不含二进制产物**。
+> 新 clone 后必须自己跑一遍下面的构建链，不能直接 `open`。
+
+**构建身份核对**（改名 / 重建后务必跑一次）：
+
+```bash
+plutil -p dist-FlashBrowser-for-MacOS.app/Contents/Info.plist \
+  | grep -E 'CFBundleExecutable|CFBundleIdentifier|CFBundleDisplayName'
+# CFBundleExecutable   => "FlashBrowserForMacOS"
+# CFBundleIdentifier   => "io.github.losseeer.flashbrowserformacos"
+# CFBundleDisplayName  => "FlashBrowser for Mac"
+
+# 反例：出现 CefFlashBrowser / com.Mzying2001.* 即说明 bundle 是旧命名的残留产物
+ls dist-FlashBrowser-for-MacOS.app/Contents/MacOS/ | grep -i cefFlash   # 应当无输出
+```
+
+> `bundle-mac.sh` 会主动检测 publish 目录里残留的其它 apphost 并打印 WARN ——
+> `dotnet publish -o <dir>` 是**叠加式**写入，不会清理上一次发布留下的文件。
 
 > ⚠️ **已知警告**：`objc: Class ExtensionDropdownHandler is implemented in both libAvaloniaNative.dylib and libcef.dylib`
 > 这是 Avalonia Native 与 CEF 都实现了 `NSToolbar` 的一个 Objective-C 类。
@@ -169,11 +201,12 @@ open ./dist-FlashBrowser-for-MacOS.app
 ```
 FlashBrowser-for-MacOS/
 ├── FlashBrowser-for-MacOS.sln
-├── README.md                                (本文档)
+├── README.md                                (本文档：项目画像 — 状态/差异/运行)
+├── PLAN.md                                  (开发计划：阶段路线图 + 会话交接)
 ├── .gitignore
 ├── bundle-mac.sh                            (把 publish 输出 → .app bundle)
-├── dist-FlashBrowser-for-MacOS.app/         (已构建产物)
-├── assets/
+├── dist-FlashBrowser-for-MacOS.app/         (已构建产物，gitignored)
+├── publish/                                 (dotnet publish 输出，gitignored)
 └── src/
     └── FlashBrowser-for-MacOS/
         ├── FlashBrowser-for-MacOS.csproj
