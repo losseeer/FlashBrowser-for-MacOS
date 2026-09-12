@@ -7,6 +7,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{973FD08C-A3F
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FlashBrowserForMacOS", "src\FlashBrowser-for-MacOS\FlashBrowser-for-MacOS.csproj", "{D61AAF71-80BD-41AA-A59A-83D362BE8701}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FlashBrowser-for-MacOS.Tests", "src\FlashBrowser-for-MacOS.Tests\FlashBrowser-for-MacOS.Tests.csproj", "{88662D64-82CB-40EF-A4F9-75712206BE11}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -20,8 +22,13 @@ Global
 		{D61AAF71-80BD-41AA-A59A-83D362BE8701}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D61AAF71-80BD-41AA-A59A-83D362BE8701}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{D61AAF71-80BD-41AA-A59A-83D362BE8701}.Release|Any CPU.Build.0 = Release|Any CPU
+		{88662D64-82CB-40EF-A4F9-75712206BE11}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{88662D64-82CB-40EF-A4F9-75712206BE11}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{88662D64-82CB-40EF-A4F9-75712206BE11}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{88662D64-82CB-40EF-A4F9-75712206BE11}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{D61AAF71-80BD-41AA-A59A-83D362BE8701} = {973FD08C-A3F7-4155-9B23-3EAEC728EDF8}
+		{88662D64-82CB-40EF-A4F9-75712206BE11} = {973FD08C-A3F7-4155-9B23-3EAEC728EDF8}
 	EndGlobalSection
 EndGlobal

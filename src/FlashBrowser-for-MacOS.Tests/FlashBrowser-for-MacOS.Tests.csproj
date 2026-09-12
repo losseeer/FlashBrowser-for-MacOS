@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <!--
+      C# identifiers cannot contain hyphens, so the folder / file name is
+      `FlashBrowser-for-MacOS.Tests` while the assembly / namespace is
+      `FlashBrowserForMacOS.Tests` — same rule as the app project
+      (see README §目录结构).
+    -->
+    <AssemblyName>FlashBrowserForMacOS.Tests</AssemblyName>
+    <RootNamespace>FlashBrowserForMacOS.Tests</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+  </ItemGroup>
+
+  <!--
+    Upstream LSO fixtures (MIT — Mzying2001/CefFlashBrowser) vendored for the
+    P1.1+ AMF0/AMF3 parser. Copied next to the test assembly so tests read them
+    from AppContext.BaseDirectory instead of a machine-specific source path.
+  -->
+  <ItemGroup>
+    <None Update="TestData\**\*.sol" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FlashBrowser-for-MacOS\FlashBrowser-for-MacOS.csproj" />
+  </ItemGroup>
+
+</Project>

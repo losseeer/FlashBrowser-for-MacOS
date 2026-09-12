@@ -14,7 +14,7 @@ This project is **a from-scratch reimplementation**, built independently on **Av
 
 The name intentionally drops the `Cef` prefix to make the runtime-engine distinction visible — `CefFlashBrowser` advertised "runs Flash via CEF + PPAPI"; this project runs Flash via Ruffle (a Rust→WASM emulator) and uses CEF only as a webview shell.
 
-Reference relationship: the upstream `Mzying2001/CefFlashBrowser` is kept locally as a read-only source for studying the SOL/AMF parser architecture (`CefFlashBrowser.Sol/`) and the status-popup UX. No code is copied across.
+Reference relationship: the upstream [`Mzying2001/CefFlashBrowser`](https://github.com/Mzying2001/CefFlashBrowser) (MIT) is consulted on GitHub — for the SOL/AMF parser architecture (`CefFlashBrowser.Sol/`) and the status-popup UX. No code is copied across. The only upstream files committed here are four `.sol` test fixtures under `src/FlashBrowser-for-MacOS.Tests/TestData/` (binary data, used to characterise the AMF0/AMF3 parser).
 
 ---
 
@@ -130,13 +130,37 @@ GUI 级验证当前不可行；方向 3 的 JS 逻辑改用 node 环境验证。
 
 ### 🟢 可立即推进（纯 C#，不依赖 GUI）
 
-- [ ] **P1.0 · 新建 `FlashBrowserForMacOS.Tests` 工程**（xunit，`net8.0`）+ 拷入 4 个上游 fixture
-  - 为什么是前置：`.sln` 目前只有 1 个工程，而 P1 的判据靠单元测试 —— 没有测试工程，整条判据无法执行
-  - fixture（实测 4 个，取自 `~/Dev/CefFlashBrowser/CefFlashBrowser.Tests/TestData/`）：`settings.sol` 845 B **AMF0**；`FBCookie.sol` 269 B / `pvz.sol` 95 B / `mao.sol` 34 B = **AMF3**
+- [x] **P1.0 · 测试工程**（2026-09-12 完成）
+  - `src/FlashBrowser-for-MacOS.Tests/`（xunit，`net8.0`，AssemblyName / RootNamespace = `FlashBrowserForMacOS.Tests`）已加入 `.sln`，并已 `ProjectReference` App 工程 —— 实测可行，App 的 `SelfContained` + 固定 RID 不阻碍被测试工程引用
+  - 4 个上游 fixture 已 **vendor** 到 `Tests/TestData/`（MIT，见 §Acknowledgements）；`None Update` + `CopyToOutputDirectory` 让测试从 `AppContext.BaseDirectory` 读，不依赖机器上的外部路径
+  - 完成判据：`dotnet test` → **6 passed**；`dotnet build -c Release` → **0 warn 0 err**
+  - fixture 实测：`settings.sol` 845 B **AMF0**；`FBCookie.sol` 269 B / `pvz.sol` 95 B / `mao.sol` 34 B = **AMF3**
 - [ ] **P1 · SOL/AMF 存档解析与编辑**（差异化 #1）
-  - 子步骤：P1.1 `Models/SolFile.cs` + `Sol/Amf0Reader.cs` → P1.2 `Sol/Amf3Reader.cs` → P1.3 `Sol/SolWriter.cs`（写回）→ P1.4 Avalonia 表格视图 + 字段编辑 → P1.5 存档定位（见下「待决策」）
-  - 完成判据：解**全部 4 个** fixture 正确 + round-trip 0 误差 + GUI 打开真实 `.sol` 能看见字段
-  - LSO 头口径：`00 BF` + `u32` 长度 + `"TCSO" 00 04 00 00 00 00` + `u16` 名字长度 + 名字 + 3 B padding + **1 B 版本（`0x00`=AMF0 / `0x03`=AMF3）**
+  - 子步骤：~~P1.1 AMF0 解析~~ → ~~P1.2 AMF3 解析~~ → ~~P1.3 写回~~ → P1.4 Avalonia 表格视图 + 字段编辑 → P1.5 存档定位（见下「待决策」）
+  - 说明：写回（原 P1.3）随两个版本各自的读取器一并做完 —— `SolFile.Write` 按头部版本分派到 AMF0 / AMF3 写出路径，两种格式都已是**字节级 round-trip**
+  - [x] **P1.1 · AMF0 解析 + round-trip**（2026-09-12 完成）
+    - 新增 `Sol/Amf0Type.cs`、`Sol/Amf0Value.cs`、`Sol/Amf0Reader.cs`、`Sol/Amf0Writer.cs`、`Models/SolFile.cs`
+    - 完成判据：`settings.sol` **字节级 round-trip 完全相等**（845 B 逐字节相同）；`dotnet test` → **35 passed**；`dotnet build -c Release` → **0 warn 0 err**
+    - 不可解析的标记（`0x04`/`0x0D`/`0x0E`/`0x11`）与非法 UTF-8 一律**显式抛错**，不做静默跳过或替换
+  - [x] **P1.2 · AMF3 解析 + round-trip**（2026-09-12 完成）
+    - 新增 `Sol/Amf3Type.cs`、`Sol/Amf3Value.cs`、`Sol/Amf3Reader.cs`、`Sol/Amf3Writer.cs`、`Sol/AmfValue.cs`（AMF0 / AMF3 值的公共基类，只为了让 `SolFile` 的属性表能装两种格式；它刻意不含任何共用成员 —— 跨格式取值本身就是错的）
+    - `SolFile.Read` / `Write` 按头部版本分派；**值类型与文件版本不符时显式报错**，不产出混格式文件
+    - 完成判据：**4 个 fixture 全部字节级 round-trip 相等**（含 `FBCookie.sol` 269 B、`pvz.sol` 95 B、`mao.sol` 34 B）；`dotnet test` → **67 passed**；`dotnet build -c Release` → **0 warn 0 err**
+    - **对象与 traits 共用一个 U29**（最容易读错的地方）：`bit0` 对象内联 / `bit1` traits 内联 / `bit2` externalizable / `bit3` dynamic / `bit4+` 密封成员数。实测反证：`pvz.sol` 的 `saveData` 那一位是 `0x0B` = `0b1011`，即「对象内联 + traits 内联 + 非 externalizable + dynamic + 0 密封成员」，与后面「空类名 + 5 组动态名值对 + 空名结束」完全吻合
+    - **三张引用表**（字符串 / 对象 / traits）：值模型保留原文的引用形态（各值的 `ReferenceIndex`），写出时按原样写回 ⇒ 字节还原**不依赖我们猜对 Flash 的去重策略**；引用下标越界显式报错
+    - 字符串表**只收非空内联串**（空串是结束标记，规范也说它从不按引用发送）；XML / XMLDocument 走**对象**引用表，且其文本内容不进字符串表 —— 这两条按错一条，后面所有引用下标都会错位
+    - externalizable 对象**显式拒绝**：规范说它的载荷没有长度前缀、布局由类自己定义（"a private agreement between client and server"），猜边界就是在毁存档
+    - Vector / Dictionary 字段顺序取自规范与 `flash-lso` 实现（**fixture 里没有，属未实测来源**）：Vector 为 `个数 → 定长标志 →（Object 向量还有元素类型名）→ 元素`，Dictionary 为 `条目数 → 弱键标志 → 键值对`
+    - 已知边界：读取器接受非最紧凑的 U29，写出器总是写最紧凑形式 ⇒ 对**别的工具写的**非规范 U29 不保证逐字节相同（Flash 自己写的全是紧凑形式，4 个 fixture 已覆盖；已有测试钉住这条行为）
+  - 完成判据：解**全部 4 个** fixture 正确 + round-trip 0 误差 + GUI 打开真实 `.sol` 能看见字段（前两项已达成，第三项待 P1.4）
+  - **LSO 格式口径（本机 4 个 fixture 逐字节核对）**：
+    - 文件头：`00 BF` + `u32` 长度（= 文件总长 − 6）+ `"TCSO" 00 04 00 00 00 00` + `u16` 名字长度 + 名字 + 3 B padding + **1 B 版本（`0x00`=AMF0 / `0x03`=AMF3）**
+    - ⚠️ **正文不是标准 AMF 对象**：成员表被剥掉了起止标记，且每个属性后面多一个 `0x00` 分隔字节。换版本只换「名字与值的编码」，分隔规则完全一样：
+      - AMF0：`repeat { u16 keyLen | key | amf0 value | 0x00 }`
+      - AMF3：`repeat { u29s keyLen+key | amf3 value | 0x00 }`
+    - 实测依据：`settings.sol` 首个属性值 `Boolean true` 只占 `01 01`，下一个属性的长度字段在偏移 29 而非 28；文件末尾也是 `Number 0.0` 之后仍有一个 `0x00`。`mao.sol` 正文 = `0B "level" 04 06 00`（`0B` 是 U29S 的长度前缀、`04 06` 是整数 6），同一规则
+    - 旁证（第三方实现）：Ruffle 实际使用的 `flash-lso` 把两种版本都解析成 `separated_list0(0x00)` + 尾部 `0x00`
+    - **嵌套**在值里的对象走标准 AMF（AMF0 成员表 + `00 00 09`；AMF3 见 `Sol/Amf3Reader.cs` 的注释），没有这个分隔字节
   - ⚠️ 不可写「AMF0 / AMF3 各半」—— 上游 AMF0 只有 1 个 fixture
 - [ ] **P2 · 本地 `.swf` 一键打开**（差异化 #2）
   - 子步骤：P2.1 `SwfProxySchemeHandlerFactory` 加 `file://` 分支（+ MIME 判断）→ P2.2 `RuffleInjector.BuildLocalLoadScript()` → P2.3 Avalonia 拖放 + FilePicker → P2.4 macOS Info.plist 关联 `.swf` UTI（**只能改 `bundle-mac.sh`**，它是 Info.plist 的唯一生成者）
@@ -194,11 +218,13 @@ GUI 级验证当前不可行；方向 3 的 JS 逻辑改用 node 环境验证。
 ### 命令
 
 ```bash
-cd src/FlashBrowser-for-MacOS
+# 构建 + 单元测试（仓库根执行）
 dotnet restore
 dotnet build -c Debug
+dotnet test
 
 # 发布 + 打 .app
+cd src/FlashBrowser-for-MacOS
 dotnet publish -c Release -r osx-arm64 -o ../../publish
 cd ../..
 ./bundle-mac.sh ./publish
@@ -266,18 +292,37 @@ FlashBrowser-for-MacOS/
 ├── dist-FlashBrowser-for-MacOS.app/         (已构建产物，gitignored)
 ├── publish/                                 (dotnet publish 输出，gitignored)
 └── src/
-    └── FlashBrowser-for-MacOS/
-        ├── FlashBrowser-for-MacOS.csproj
-        ├── Program.cs                       (CEF 运行时初始化 + ruffle/swfproxy scheme 注册)
-        ├── App.axaml / App.axaml.cs
-        ├── MainWindow.axaml                 (地址栏 + 工具栏 + 浏览器占位)
-        ├── MainWindow.axaml.cs              (AvaloniaCefBrowser 挂载 + 事件 + Ruffle 注入)
-        ├── app.manifest
-        ├── Ruffle/
-        │   ├── RuffleSchemeHandlerFactory.cs   (ruffle://app/ 供给 ruffle.js / wasm)
-        │   ├── RuffleInjector.cs               (注入 bootstrap JS + 早期注入 + .swf 重写)
-        │   └── SwfProxySchemeHandlerFactory.cs (swfproxy://app/load?u=... 跨域 SWF 代理)
-        └── Assets/Ruffle/                      (ruffle.js / core.ruffle.*.js / *.wasm)
+    ├── FlashBrowser-for-MacOS/
+    │   ├── FlashBrowser-for-MacOS.csproj
+    │   ├── Program.cs                       (CEF 运行时初始化 + ruffle/swfproxy scheme 注册)
+    │   ├── App.axaml / App.axaml.cs
+    │   ├── MainWindow.axaml                 (地址栏 + 工具栏 + 浏览器占位)
+    │   ├── MainWindow.axaml.cs              (AvaloniaCefBrowser 挂载 + 事件 + Ruffle 注入)
+    │   ├── app.manifest
+    │   ├── Models/
+    │   │   └── SolFile.cs                      (LSO 容器：文件头 + 属性表，按版本分派 Read/Write)
+    │   ├── Sol/
+    │   │   ├── AmfValue.cs                     (AMF0/AMF3 值的公共基类，仅用于 SolFile 的属性表)
+    │   │   ├── Amf0Type.cs                     (AMF0 类型标记枚举)
+    │   │   ├── Amf0Value.cs                    (值模型：一型一类，保真用)
+    │   │   ├── Amf0Reader.cs                   (AMF0 读取，不可解析标记一律显式报错)
+    │   │   ├── Amf0Writer.cs                   (AMF0 写出，大端)
+    │   │   ├── Amf3Type.cs                     (AMF3 类型标记枚举)
+    │   │   ├── Amf3Value.cs                    (值模型：保留字符串/对象/traits 的引用形态)
+    │   │   ├── Amf3Reader.cs                   (AMF3 读取 + 三张引用表 + 深度上限)
+    │   │   └── Amf3Writer.cs                   (AMF3 写出，有状态：引用表须全程复用)
+    │   ├── Ruffle/
+    │   │   ├── RuffleSchemeHandlerFactory.cs   (ruffle://app/ 供给 ruffle.js / wasm)
+    │   │   ├── RuffleInjector.cs               (注入 bootstrap JS + 早期注入 + .swf 重写)
+    │   │   └── SwfProxySchemeHandlerFactory.cs (swfproxy://app/load?u=... 跨域 SWF 代理)
+    │   └── Assets/Ruffle/                      (ruffle.js / core.ruffle.*.js / *.wasm)
+    └── FlashBrowser-for-MacOS.Tests/
+        ├── FlashBrowser-for-MacOS.Tests.csproj (xunit; AssemblyName/Namespace = FlashBrowserForMacOS.Tests)
+        ├── LsoFixtureTests.cs                  (上游 fixture 的表征测试)
+        ├── SolFileTests.cs                     (4 个 fixture 解析 + 逐字节 round-trip)
+        ├── Amf0RoundTripTests.cs               (合成值覆盖其余 AMF0 类型 + 错误路径)
+        ├── Amf3RoundTripTests.cs               (AMF3 全类型 + U29 边界 + 引用表 + 错误路径)
+        └── TestData/                           (4 个上游 .sol fixture，vendor 自 MIT 上游)
 ```
 
 ---
