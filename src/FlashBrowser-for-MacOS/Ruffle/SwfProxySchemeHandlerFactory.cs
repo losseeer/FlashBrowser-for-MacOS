@@ -10,10 +10,11 @@ using Xilium.CefGlue.Common.Handlers;
 namespace FlashBrowserForMacOS.Ruffle;
 
 /// <summary>
-/// Serves SWF files through a CORS-enabled proxy scheme so Ruffle can load
-/// 4399's cross-origin SWF (which lacks <c>Access-Control-Allow-Origin</c>).
+/// Serves cross-origin resources (SWFs and the XML/GIF/SWF control files that
+/// Ruffle's internal URLLoader pulls at runtime) through a CORS-enabled proxy
+/// scheme, because 4399's resource hosts lack <c>Access-Control-Allow-Origin</c>.
 ///
-/// URL shape: <c>swfproxy://app/load?u=&lt;urlencoded absolute SWF URL&gt;</c>
+/// URL shape: <c>swfproxy://app/load?u=&lt;urlencoded absolute resource URL&gt;</c>
 ///
 /// The handler downloads the target server-side (with a 4399 <c>Referer</c> +
 /// browser User-Agent to defeat anti-hotlink) and returns the bytes with CORS
@@ -69,7 +70,7 @@ public sealed class SwfProxySchemeHandlerFactory : CefSchemeHandlerFactory
             }
 
             var bytes = resp.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
-            return Swf(bytes);
+            return Resource(bytes, resp.Content.Headers.ContentType?.MediaType);
         }
         catch (Exception ex)
         {
@@ -99,7 +100,13 @@ public sealed class SwfProxySchemeHandlerFactory : CefSchemeHandlerFactory
         url.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
         url.StartsWith("http://", StringComparison.OrdinalIgnoreCase);
 
-    private static CefResourceHandler Swf(byte[] bytes)
+    /// <summary>
+    /// Serves a proxied resource with the upstream media type. Ruffle's internal
+    /// URLLoader pulls more than SWFs (control XML, tracking GIFs, ad SWFs), so the
+    /// proxy must not hard-code the Flash MIME type; when upstream omits it, fall
+    /// back to the SWF type that the scheme originally served.
+    /// </summary>
+    private static CefResourceHandler Resource(byte[] bytes, string? mediaType)
     {
         var headers = new NameValueCollection
         {
@@ -110,7 +117,9 @@ public sealed class SwfProxySchemeHandlerFactory : CefSchemeHandlerFactory
         {
             Status = 200,
             StatusText = "OK",
-            MimeType = "application/x-shockwave-flash",
+            MimeType = string.IsNullOrWhiteSpace(mediaType)
+                ? "application/x-shockwave-flash"
+                : mediaType,
             Headers = headers,
             Response = new MemoryStream(bytes)
         };

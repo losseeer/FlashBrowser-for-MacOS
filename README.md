@@ -87,8 +87,9 @@ Serious error ... reading 'stream_from'  ← this.instance 已 null
 - `MainWindow` 订阅 `AvaloniaCefBrowser.JavascriptContextCreated`（对应 CEF 渲染进程的
   `OnContextCreated`，**在页面脚本执行前**触发），主 frame 命中 `4399.com/flash/` 即注入早期脚本。
 - 早期脚本在 `flashopen1.js` 执行前伪造 `navigator.plugins` / `navigator.mimeTypes`
-  （复刻 Ruffle `pluginPolyfill` 的 `defineProperty` 做法），让 4399 的 `hasUsableFlash()`
-  返回 `true`，从源头阻断 `showBlockFlash()` DOM 干预。
+  （复刻 Ruffle `pluginPolyfill` 的 `defineProperty` 做法）。
+  ⚠️ 2026-09-12 修正认知：4399 真正的检测门不是 plugins 而是 `checkflash()` 轮询
+  （见 §TODO P0-1b），plugins 伪造保留（无害、且部分脚本仍读它）。
 - 附带一个**只记录不修改**的 `MutationObserver`，当 `ruffle-player` 被移出 DOM 时打印
   `[Ruffle-early] ruffle-player REMOVED ...`，用于定位到底哪个脚本移除 player。
 
@@ -184,16 +185,16 @@ swiftc -O -o /tmp/winlist .workbuddy/gui-tools/winlist.swift
 
 ### 🔴 阻塞中
 
-- [ ] **P0-0 · 间歇性启动卡死（疑似，低优先级）**（2026-09-12 从「浏览器实例从未创建」降级改写）
-  - 当天约 8 次运行中**仅 1 次**出现：窗口正常打开、控件完成布局，但 `browser initialized` 不触发、
-    页面不加载、`/json` 目标列表为空。随后**连续 4 次运行全部正常**，`dotnet-stack` 采样主线程
-    栈顶为正常的 `Avalonia.Threading.Dispatcher.MainLoop`（该次采样发生在正常运行的实例上）
+- [x] **P0-0 · 间歇性启动卡死 —— 根因已由用户确认（2026-09-12）**
+  - 现象：约 8 次运行中 1 次，窗口开、控件布局完成，但 `browser initialized` 不触发、页面不加载、
+    零 TCP、`/json` 目标列表为空；重开即恢复
+  - **根因（用户确认）**：启动浏览器会触发一个需要**输入操作密码**的系统授权弹窗；弹窗未应答时
+    CEF 初始化一直等待，表现即「启动卡死」。与全部观测吻合：主线程栈顶是正常的
+    `Dispatcher.MainLoop`（在等待、不是死锁）、零 TCP（还没走到网络）、窗口与布局都正常
   - 早先把「8 秒哨兵 `DispatcherTimer.RunOnce` 不触发」解读为 UI 线程被阻塞 —— **该判据已作废**：
-    `RunOnce` 返回的 `IDisposable` 当时未被持有引用，被 GC 回收的定时器同样不触发，
-    与线程卡死无法区分；诊断代码已改为把定时器存进字段（`MainWindow.axaml.cs`）
-  - **未解决**：卡死那次没赶上采样，根因未知。复现概率低、且重开即恢复，不阻塞其余工作
-  - 完成判据：在卡死发生的现场抓到主线程/CEF UI 线程的线程栈（`dotnet-stack report -p <pid>`，
-    需 `DOTNET_ROOT=~/.dotnet` + `PATH+=~/.dotnet/tools`）
+    `RunOnce` 返回的 `IDisposable` 未被持有引用时会被 GC，同样不触发；诊断代码已把定时器存进字段
+  - 后续（可选、不阻塞）：确认具体是哪个授权项（本机曾观测到 `SecurityAgent` / `universalAccessAuthWarn`
+    弹窗残留），评估能否预先授权让弹窗不再出现；代码侧无需改动
 - [x] **P0-1 · 解决 `<ruffle-player>` 被 4399 脚本从 DOM 移除**（2026-09-12 **GUI 验证通过**）
   - 根因（2026-09-12 反混淆 `ruffle.js` 0.6.0 后修正）：移除发生在 `load()` 的
     `await ensureFreshInstance()` **内部**，早于 `stream_from` / `load_data` 被调用；
@@ -219,11 +220,28 @@ swiftc -O -o /tmp/winlist .workbuddy/gui-tools/winlist.swift
     - 诊断日志：`browser initialized` → 页面 HTTP 200 → `New Ruffle instance created (0.6.0,
       wgpu-webgl)` → `Loading SWF file swfproxy://...main.swf`；**全程 0 次
       `Ruffle instance destroyed`**；早期注入生效（`[Ruffle-early] navigator.plugins spoofed`）
-  - ⚠️ 遗留（新发现，记为 P0-1b）：游戏运行期经 Ruffle **内部 URLLoader** 拉的 4399 平台资源
-    （`stat.api.4399.com/flash_ctrl_version.xml`、`cdn.comment.4399pk.com/control/*.swf|gif` 广告/控制件）
-    走的是浏览器原生 fetch（不经 `swfproxy`），被 CORS 拦截报 `FetchError("Got JS error")`；
-    主游戏 `main.swf` 本体不受影响。另 `blockflashtip.html` 加载被 `ERR_ABORTED`（疑似被我们的
-    检测屏蔽路径中止，无害但可确认一次）
+  - [x] **P0-1b · Ruffle 内部 URLLoader 的子资源 CORS**（2026-09-12 修复并 GUI 验证）
+    - 根因：主 SWF 的 URL 在注入时已改写成 `swfproxy`，但游戏运行期 Ruffle 内部 URLLoader 拉的
+      4399 平台资源（`flash_ctrl_version.xml`、`cdn.comment.4399pk.com/control/*.swf|gif` 广告/控制件、
+      `flash_flow/log.js` 等统计端点）走浏览器原生 fetch，这些宿主不发 ACAO → `FetchError`
+    - 修复 ①：早期注入包装 `window.fetch` —— 跨域 http(s) **GET** 且 `credentials !== "include"`
+      的请求重写为 `swfproxy://app/load?u=...`（Ruffle 的 wasm-bindgen 每次调用按属性查找
+      `window.fetch`，运行时补包对 WASM 内部发起的 fetch 同样生效；凭据类请求不改写，
+      避免丢浏览器 cookie；同源/POST/`no-cors` 均不动）
+    - 修复 ②：`SwfProxySchemeHandlerFactory` 的 Content-Type 改为**透传上游值**
+      （原来硬编码 SWF MIME，服务不了 XML/GIF）
+    - **顺带定位并修掉 showBlockFlash 竞态（这是此前「有时起不来」的真机制）**：
+      `flashopen1.js` 并不查 `navigator.plugins` —— 它 `document.write` 一个 10×10 的
+      `objtest.swf` embed（`testplayer1`）后**每 100ms 调 `checkflash()`**（真 Flash 插件挂在
+      embed 上的方法），连续 5 次 TypeError 就用 `blockflashtip.html` iframe 整体换掉 `#swfdiv`。
+      我们的 LoadEnd bootstrap 能否抢在它之前挂好 player 全看时序（实测直连常赢、应用内导航常输）
+      → 早期注入给 embed/object 原型挂 `checkflash() = 1`（真插件总会应答，我们替它应答），
+      检测首轮即通过，`showBlockFlash` 从此不可达；bootstrap 另加 12×500ms 重试兜底
+    - GUI 验证（走应用内导航路径，即此前必败场景）：`ruffle-player` 建立且 `isConnected`、
+      `#__ruffle_stage` 在位、`#swfdiv` 无提示 iframe、日志 **10+ 条 `proxied fetch`**（含此前必挂的
+      `ctrl_mo_v5.swf` / `flash_ctrl_version.xml`）、**全程 0 条 `FetchError`**
+    - 已知瑕疵（不影响玩法，暂不处理）：游戏统计上报的 `hosturl` / `playurl` 参数里带的是
+      `swfproxy://app/load?u=...` 形态的地址 —— 代理改写泄漏进了上报字段
 
 ### 🟢 可立即推进（纯 C#，不依赖 GUI）
 

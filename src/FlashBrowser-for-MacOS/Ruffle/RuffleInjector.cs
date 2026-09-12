@@ -49,8 +49,10 @@ public static class RuffleInjector
     /// (via <c>JavascriptContextCreated</c>) — i.e. BEFORE the page's own scripts
     /// (including 4399's <c>flashopen1.js</c> Flash-detection) run.
     ///
-    /// It fakes <c>navigator.plugins</c> / <c>navigator.mimeTypes</c> so 4399's
-    /// <c>hasUsableFlash()</c> passes, and installs a MutationObserver that only
+    /// It fakes <c>navigator.plugins</c> / <c>navigator.mimeTypes</c>, installs a
+    /// <c>checkflash()</c> shim on embed/object prototypes (4399's flashopen1.js polls
+    /// that plugin method 5 times and swaps the game container for a "install Flash"
+    /// iframe when it never answers), and adds a MutationObserver that only
     /// logs (does not mutate) when a <c>ruffle-player</c> is torn out of the DOM —
     /// this gives us ground truth about which script removes the player.
     /// </summary>
@@ -96,6 +98,74 @@ public static class RuffleInjector
                     console.log("[Ruffle-early] navigator.plugins spoofed");
                 } catch (e) {
                     console.error("[Ruffle-early] spoof failed: " + e);
+                }
+
+                // 4399's flashopen1.js does NOT check navigator.plugins. It document.write's
+                // a 10x10 objtest.swf embed (id testplayer1) and polls
+                //   document.getElementById("testplayer1").checkflash()
+                // every 100ms — checkflash() being a method the real Flash plugin exposes
+                // on the embed. Five consecutive TypeErrors (always, without a real plugin)
+                // trigger showBlockFlash(), which replaces #swfdiv's innerHTML with a
+                // "install Flash" iframe, taking the game embed with it. Whether our
+                // LoadEnd-time bootstrap wins that 500ms race decides whether the game
+                // loads at all (observed: direct navigation usually won, in-app
+                // navigation usually lost). A real plugin always answers checkflash(), so
+                // we answer for it: every <embed>/<object> reports Flash present, the
+                // first poll succeeds, and showBlockFlash() is never reached.
+                try {
+                    var checkflash = function () { return 1; };
+                    if (window.HTMLEmbedElement) window.HTMLEmbedElement.prototype.checkflash = checkflash;
+                    if (window.HTMLObjectElement) window.HTMLObjectElement.prototype.checkflash = checkflash;
+                    console.log("[Ruffle-early] checkflash() shim installed");
+                } catch (e) {
+                    console.error("[Ruffle-early] checkflash shim failed: " + e);
+                }
+
+                // Patch window.fetch so cross-origin GETs go through the CORS-enabled
+                // swfproxy scheme. Ruffle's internal URLLoader (control XML, ad/control
+                // SWFs, tracking GIFs) fetches directly and those hosts send no
+                // Access-Control-Allow-Origin, which used to kill every such load with
+                // FetchError("Got JS error"). wasm-bindgen resolves window.fetch on the
+                // window object at CALL time, so patching the property here also covers
+                // the fetches made from inside the Ruffle WASM.
+                //
+                // Deliberately narrow, to leave the rest of the page untouched:
+                // - GET only (POST etc. keep native semantics);
+                // - http(s) and cross-origin only;
+                // - credentials !== "include" only — a proxied request would lose the
+                //   browser cookie jar, so credentialed calls must not be rewritten;
+                //   note a cross-origin fetch with the default "same-origin" carries no
+                //   cookies either, so the proxy loses nothing for those.
+                try {
+                    if (!window.__ruffleFetchPatched && typeof window.fetch === "function") {
+                        window.__ruffleFetchPatched = true;
+                        var nativeFetch = window.fetch.bind(window);
+                        window.fetch = function(input, init) {
+                            try {
+                                var url = (typeof input === "string") ? input : (input && input.url);
+                                var method = ((init && init.method) || (input && input.method) || "GET").toUpperCase();
+                                var credentials = (init && init.credentials) || (input && input.credentials) || "same-origin";
+                                var mode = (init && init.mode) || (input && input.mode) || "cors";
+                                if (url && typeof url === "string"
+                                        && method === "GET" && mode !== "no-cors"
+                                        && credentials !== "include"
+                                        && url.indexOf("swfproxy://") !== 0) {
+                                    var abs = new URL(url, location.href);
+                                    if ((abs.protocol === "http:" || abs.protocol === "https:")
+                                            && abs.origin !== location.origin) {
+                                        console.log("[Ruffle-early] proxied fetch: " + abs.href);
+                                        return nativeFetch("swfproxy://app/load?u=" + encodeURIComponent(abs.href), init);
+                                    }
+                                }
+                            } catch (e) {
+                                console.error("[Ruffle-early] fetch patch fell through: " + e);
+                            }
+                            return nativeFetch(input, init);
+                        };
+                        console.log("[Ruffle-early] window.fetch wrapped for swfproxy");
+                    }
+                } catch (e) {
+                    console.error("[Ruffle-early] fetch patch failed: " + e);
                 }
 
                 // Diagnostic only: log when a ruffle-player is removed from the DOM
@@ -317,11 +387,28 @@ public static class RuffleInjector
                     try {
                         removeTestFlashPlayers();
                         var ruffle = window.RufflePlayer && window.RufflePlayer.newest();
-                        if (ruffle) {
-                            // Fake navigator.plugins so 4399's flashopen1.js detection passes.
-                            if (typeof ruffle.pluginPolyfill === 'function') ruffle.pluginPolyfill();
-                            loadMainGame(ruffle);
+                        if (!ruffle) {
+                            console.error('[Ruffle] ruffle.newest() unavailable');
+                            return;
                         }
+                        // Fake navigator.plugins so 4399's flashopen1.js detection passes.
+                        if (typeof ruffle.pluginPolyfill === 'function') ruffle.pluginPolyfill();
+
+                        // The game embed can be missing right at LoadEnd (ad scripts still
+                        // rearranging the page). Retry instead of failing silently — but
+                        // never create a second player.
+                        var attempts = 0;
+                        var tryStart = function() {
+                            attempts++;
+                            if (window.__ruffleMainStarted) return;
+                            if (loadMainGame(ruffle)) { window.__ruffleMainStarted = true; return; }
+                            if (attempts >= 12) {
+                                console.error('[Ruffle] no Flash host found after ' + attempts + ' attempts');
+                                return;
+                            }
+                            setTimeout(tryStart, 500);
+                        };
+                        tryStart();
                     } catch (e) {
                         console.error('[Ruffle] injection error:', e);
                     }
