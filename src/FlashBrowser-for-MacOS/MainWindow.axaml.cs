@@ -211,6 +211,9 @@ public partial class MainWindow : Window
     private void OnDevToolsClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => _browser.ShowDeveloperTools();
 
+    private void OnSolViewerClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => new SolViewerWindow().Show();
+
     // ---- Address bar ----
 
     private void OnAddressKeyDown(object? sender, KeyEventArgs e)

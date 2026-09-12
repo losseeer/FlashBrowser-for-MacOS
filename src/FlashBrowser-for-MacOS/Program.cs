@@ -11,6 +11,13 @@ namespace FlashBrowserForMacOS;
 internal static class Program
 {
     /// <summary>
+    /// P1.4 dev convenience: <c>--sol=&lt;path&gt;</c> opens the .sol viewer on that file
+    /// at startup. Exists so a GUI run can be made self-describing (the viewer logs what
+    /// it loaded into FB_DIAG_LOG) without anyone clicking through the file picker.
+    /// </summary>
+    public static string? LaunchSolPath { get; private set; }
+
+    /// <summary>
     /// CEF on macOS does not allow multiple processes to share a cache directory;
     /// using a per-launch unique path avoids "files in use" conflicts when running
     /// the app multiple times in dev.
@@ -18,6 +25,7 @@ internal static class Program
     public static int Main(string[] args)
     {
         Diagnostics.Initialize(GetOption(args, "--diag-log"));
+        LaunchSolPath = GetOption(args, "--sol");
 
         var cachePath = Path.Combine(
             Path.GetTempPath(),

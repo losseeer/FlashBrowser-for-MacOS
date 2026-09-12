@@ -4,5 +4,7 @@
              RequestedThemeVariant="Light">
   <Application.Styles>
     <FluentTheme />
+    <!-- DataGrid control theme, required by the .sol property table (P1.4) -->
+    <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml"/>
   </Application.Styles>
 </Application>

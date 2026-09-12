@@ -31,6 +31,8 @@
     <PackageReference Include="Avalonia" Version="11.2.7" />
     <PackageReference Include="Avalonia.Desktop" Version="11.2.7" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.7" />
+    <!-- P1.4: DataGrid for the .sol property table -->
+    <PackageReference Include="Avalonia.Controls.DataGrid" Version="11.2.7" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="11.2.7" />
     <PackageReference Include="Avalonia.Diagnostics" Version="11.2.7"
                       Condition="'$(Configuration)' == 'Debug'" />

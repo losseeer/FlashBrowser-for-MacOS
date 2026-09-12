@@ -1,0 +1,74 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="FlashBrowserForMacOS.SolViewerWindow"
+        Title="SOL 存档"
+        Width="820" Height="560"
+        MinWidth="560" MinHeight="360">
+
+  <DockPanel LastChildFill="True">
+
+    <!-- Top: toolbar + file info -->
+    <Border DockPanel.Dock="Top"
+            Padding="8"
+            Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}">
+      <StackPanel>
+        <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto">
+          <Button Content="打开…"       Padding="12,4" Click="OnOpenClicked"/>
+          <Button Grid.Column="1" Content="重新加载" Margin="8,0,0,0" Padding="12,4" Click="OnReloadClicked"/>
+          <Button Grid.Column="2" Content="保存"     Margin="8,0,0,0" Padding="12,4" Click="OnSaveClicked"/>
+          <Button Grid.Column="3" Content="另存为…"  Margin="8,0,0,0" Padding="12,4" Click="OnSaveAsClicked"/>
+          <TextBlock Grid.Column="5" x:Name="FilePathText"
+                     VerticalAlignment="Center" Opacity="0.7"
+                     TextTrimming="CharacterEllipsis"/>
+        </Grid>
+        <TextBlock x:Name="InfoText" Margin="0,6,0,0" FontSize="11" Opacity="0.8"/>
+      </StackPanel>
+    </Border>
+
+    <!-- Bottom: status bar -->
+    <Border DockPanel.Dock="Bottom"
+            Padding="8,4"
+            Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}">
+      <TextBlock x:Name="StatusText"
+                 Text="打开一个 .sol 文件开始"
+                 FontSize="11"
+                 Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+    </Border>
+
+    <!-- Center: property table.
+         Editable rows commit their text on every keystroke
+         (UpdateSourceTrigger=PropertyChanged) so a save always sees the
+         latest content regardless of where keyboard focus sits. -->
+    <DataGrid x:Name="Grid"
+              AutoGenerateColumns="False"
+              CanUserSortColumns="False"
+              CanUserResizeColumns="True"
+              HeadersVisibility="Column"
+              GridLinesVisibility="Horizontal"
+              SelectionMode="Single">
+      <DataGrid.Columns>
+        <DataGridTextColumn Header="名字" Binding="{Binding Name}" IsReadOnly="True" Width="170"/>
+        <DataGridTextColumn Header="类型" Binding="{Binding TypeName}" IsReadOnly="True" Width="150"/>
+        <DataGridTemplateColumn Header="值" Width="*">
+          <DataGridTemplateColumn.CellTemplate>
+            <DataTemplate>
+              <Panel Margin="6,2">
+                <CheckBox IsChecked="{Binding BoolValue}"
+                          IsVisible="{Binding IsBoolean}"
+                          IsEnabled="{Binding !IsDisplayOnly}"/>
+                <TextBox Text="{Binding TextValue, UpdateSourceTrigger=PropertyChanged}"
+                         IsVisible="{Binding IsTextBox}"
+                         BorderThickness="0" Background="Transparent"
+                         VerticalContentAlignment="Center"/>
+                <TextBlock Text="{Binding DisplayValue}"
+                           IsVisible="{Binding IsDisplayOnly}"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"/>
+              </Panel>
+            </DataTemplate>
+          </DataGridTemplateColumn.CellTemplate>
+        </DataGridTemplateColumn>
+      </DataGrid.Columns>
+    </DataGrid>
+  </DockPanel>
+</Window>

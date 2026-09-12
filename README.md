@@ -267,7 +267,23 @@ swiftc -O -o /tmp/winlist .workbuddy/gui-tools/winlist.swift
     - externalizable 对象**显式拒绝**：规范说它的载荷没有长度前缀、布局由类自己定义（"a private agreement between client and server"），猜边界就是在毁存档
     - Vector / Dictionary 字段顺序取自规范与 `flash-lso` 实现（**fixture 里没有，属未实测来源**）：Vector 为 `个数 → 定长标志 →（Object 向量还有元素类型名）→ 元素`，Dictionary 为 `条目数 → 弱键标志 → 键值对`
     - 已知边界：读取器接受非最紧凑的 U29，写出器总是写最紧凑形式 ⇒ 对**别的工具写的**非规范 U29 不保证逐字节相同（Flash 自己写的全是紧凑形式，4 个 fixture 已覆盖；已有测试钉住这条行为）
-  - 完成判据：解**全部 4 个** fixture 正确 + round-trip 0 误差 + GUI 打开真实 `.sol` 能看见字段（前两项已达成，第三项待 P1.4）
+  - 完成判据：解**全部 4 个** fixture 正确 + round-trip 0 误差 + GUI 打开真实 `.sol` 能看见字段（2026-09-12 全部达成，见 P1.4）
+  - [x] **P1.4 · Avalonia 表格视图 + 字段编辑**（2026-09-12 完成）
+    - 新增 `Sol/SolPropertyRow.cs`（行模型，无 UI 依赖、可单测）、`SolViewerWindow.axaml(.cs)`、
+      csproj 加 `Avalonia.Controls.DataGrid` 11.2.7、`App.axaml` 加 DataGrid Fluent 主题
+    - 入口：主窗口工具栏「存档」按钮；`--sol=<path>` 启动参数直开（GUI 验证与将来排障用）
+    - **保真约束（行模型的核心设计）**：编辑写回是**原地修改**原值对象（`value.Value = …`），
+      绝不替换对象 —— AMF3 的 `ReferenceIndex` / 对象引用表挂在原对象上，替换即丢「此处是引用」的事实；
+      容器类值（对象/数组/Vector/Dictionary/ByteArray 等）P1.4 一律只读
+    - 可编辑类型：Boolean（CheckBox）、String/LongString/XMLDocument/AMF3 String·XML（文本，含带
+      `@str(n)` 引用形态的 —— 只改内容、引用下标不动）、Number/Integer/Double/Date·ms（InvariantCulture
+      数字，AMF3 Integer 做 29 位范围校验）。解析失败**整次中止保存**并在状态栏列出错误，不静默降级
+    - 另存为/打开用 Avalonia `StorageProvider` FilePicker；「重新加载」丢弃未保存修改并明示
+    - 完成判据：`dotnet test` → **78 passed**（新增 11 项行模型测试：原地写回、引用保真、范围校验、
+      未编辑 fixture 仍字节级 round-trip、编辑后再解析值正确）；GUI 实测 `--sol=…/settings.sol` ——
+      诊断日志 `sol viewer: loaded 'settings' format=0x00 properties=23`，`winlist` 确认窗口
+      「SOL 存档 — settings.sol」在屏（821×588）。字段级像素验证受本机屏幕录制权限墙限制，无法截图，
+      以「窗口在屏 + 数据经窗口代码路径加载」为观测上限
   - **LSO 格式口径（本机 4 个 fixture 逐字节核对）**：
     - 文件头：`00 BF` + `u32` 长度（= 文件总长 − 6）+ `"TCSO" 00 04 00 00 00 00` + `u16` 名字长度 + 名字 + 3 B padding + **1 B 版本（`0x00`=AMF0 / `0x03`=AMF3）**
     - ⚠️ **正文不是标准 AMF 对象**：成员表被剥掉了起止标记，且每个属性后面多一个 `0x00` 分隔字节。换版本只换「名字与值的编码」，分隔规则完全一样：

@@ -16,6 +16,12 @@ public partial class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             desktop.MainWindow = new MainWindow();
+
+            // --sol=<path>: open the .sol viewer alongside the browser (P1.4 dev/GUI runs).
+            if (Program.LaunchSolPath is { } solPath)
+            {
+                new SolViewerWindow(solPath).Show();
+            }
         }
 
         base.OnFrameworkInitializationCompleted();
