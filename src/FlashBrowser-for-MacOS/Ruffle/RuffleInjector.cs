@@ -218,12 +218,19 @@ public static class RuffleInjector
 
                 // Route a .swf URL through the CORS-enabled proxy scheme so the
                 // cross-origin fetch succeeds (sda.4399.com has no ACAO header).
+                //
+                // The proxy path mirrors the real SWF path (swfproxy://app/load/<path>?u=…):
+                // the scheme handler only reads ?u=, but Ruffle derives the
+                // SharedObject localStorage key from the movie URL (host + path +
+                // sol name), so keeping the real path per-game keeps save keys
+                // distinct — with a flat /load path every 4399 game would share
+                // one key namespace and their saves could collide.
                 function toProxy(raw) {
                     if (!raw) return raw;
                     if (/^swfproxy:\/\//i.test(raw)) return raw;
                     try {
-                        var abs = new URL(raw, window.location.href).href;
-                        return 'swfproxy://app/load?u=' + encodeURIComponent(abs);
+                        var abs = new URL(raw, window.location.href);
+                        return 'swfproxy://app/load' + abs.pathname + '?u=' + encodeURIComponent(abs.href);
                     } catch (e) {
                         return raw;
                     }
@@ -348,6 +355,11 @@ public static class RuffleInjector
 
                     var swfUrl = swfSourceOf(el);
                     var proxyUrl = toProxy(swfUrl);
+                    // P1.5: Ruffle derives SharedObject save keys from its movie URL.
+                    // Stash the proxy URL so the app's save-key derivation script can
+                    // read exactly what Ruffle sees (player.swfUrl is not reliably
+                    // readable from the outside).
+                    try { window.__fbSwfProxyUrl = proxyUrl; } catch (e) {}
                     var fv = extractFlashvars(el);
 
                     var player = ruffle.createPlayer();

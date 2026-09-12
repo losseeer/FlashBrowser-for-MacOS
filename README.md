@@ -251,7 +251,7 @@ swiftc -O -o /tmp/winlist .workbuddy/gui-tools/winlist.swift
   - 完成判据：`dotnet test` → **6 passed**；`dotnet build -c Release` → **0 warn 0 err**
   - fixture 实测：`settings.sol` 845 B **AMF0**；`FBCookie.sol` 269 B / `pvz.sol` 95 B / `mao.sol` 34 B = **AMF3**
 - [ ] **P1 · SOL/AMF 存档解析与编辑**（差异化 #1）
-  - 子步骤：~~P1.1 AMF0 解析~~ → ~~P1.2 AMF3 解析~~ → ~~P1.3 写回~~ → P1.4 Avalonia 表格视图 + 字段编辑 → P1.5 存档定位（见下「待决策」）
+  - 子步骤：~~P1.1 AMF0 解析~~ → ~~P1.2 AMF3 解析~~ → ~~P1.3 写回~~ → ~~P1.4 Avalonia 表格视图 + 字段编辑~~ → ~~P1.5 存档定位~~（见下「待决策」，2026-09-12 完成）
   - 说明：写回（原 P1.3）随两个版本各自的读取器一并做完 —— `SolFile.Write` 按头部版本分派到 AMF0 / AMF3 写出路径，两种格式都已是**字节级 round-trip**
   - [x] **P1.1 · AMF0 解析 + round-trip**（2026-09-12 完成）
     - 新增 `Sol/Amf0Type.cs`、`Sol/Amf0Value.cs`、`Sol/Amf0Reader.cs`、`Sol/Amf0Writer.cs`、`Models/SolFile.cs`
@@ -297,15 +297,35 @@ swiftc -O -o /tmp/winlist .workbuddy/gui-tools/winlist.swift
   - 子步骤：P2.1 `SwfProxySchemeHandlerFactory` 加 `file://` 分支（+ MIME 判断）→ P2.2 `RuffleInjector.BuildLocalLoadScript()` → P2.3 Avalonia 拖放 + FilePicker → P2.4 macOS Info.plist 关联 `.swf` UTI（**只能改 `bundle-mac.sh`**，它是 Info.plist 的唯一生成者）
   - 完成判据：拖入 `.swf` 5 秒内进游戏画面；双击 `.swf` 默认用本应用打开
 
-### 🟡 待决策（阻塞 P1.5）
+### 🟡 待决策
 
-- [ ] **P1「存档编辑」的对象需先定 —— 本应用不产生 `.sol` 文件**
-  - 事实：内嵌 Ruffle 是 **web/WASM** 构建，存储后端为 `ruffle_web::storage::LocalStorageBackend` → 写浏览器 **localStorage**，**不落 `.sol`**；且 CEF profile 是每次启动唯一的临时目录（`Program.cs:20-22`）、退出即递归删除（`Program.cs:83-86`）⇒ **存档每次退出被清空**
-  - 三选一（未定）：
-    1. **持久化 CEF profile**（固定 `RootCachePath` + 去掉退出即删），另写 **LevelDB** 读取 —— 上面那套 `.sol` 解析器不适用（存的是 localStorage 键值）
-    2. **做导入/导出**（「导出当前存档 → `.sol`」「导入 `.sol` → localStorage」），绕开 LevelDB，但仍依赖方案 1
-    3. **只做离线 `.sol` 工具**，不碰本应用运行时 —— 三者中最短路径，且与「P1 不需要 GUI」天然一致
-  - 附带陷阱：P0-2 验证时依赖存档的游戏会表现成「首次运行」，别误判成加载失败
+- [x] **P1.5 · 存档定位**（2026-09-12 完成：**持久化 profile + 页面存档导入/导出**，LevelDB 读取确认不需要）
+  - **存储事实（决定性，反混淆 Ruffle 0.6.0 bundle + 上游源码确证）**：值 =
+    `base64(标准 .sol 文件字节)`（`web/src/storage.rs` 的 `LocalStorageBackend`；bundle 内
+    `zn`=atob→字节、`xn`=校验 `00 BF`+`"TCSO" 00 04 00 00 00 00`）；键 =
+    `{movie_host}/{movie_path}/{存档名}`（`avm1/globals/shared_object.rs`，名含 `/` 加 `#` 前缀）。
+    ⇒ **不需要 LevelDB 解析**：存档数据经活页面读写（`EvaluateJavaScript`/`ExecuteScript`），
+    P1 解析器直接消费；LevelDB 只有「不开浏览器直接读盘」才需要
+  - **地基：持久化 profile**（`Program.cs`）：`RootCachePath` 固定为
+    `~/Library/Application Support/FlashBrowserForMacOS/CEF`，不再退出即删；
+    `--temp-profile` 保留旧的每启动唯一+退出删行为（多实例/dev 用）。实测：游戏运行期
+    Ruffle 自己写的存档（`app//seed4399Value`，80 B）**跨越多次重启存活**
+  - **键空间修复（swfproxy）**：Ruffle 从 movie URL 派生存档键，而 movie URL 是代理地址 ——
+    若代理是扁平 `swfproxy://app/load?u=…`，**所有 4399 游戏共享一个键空间、存档会互相覆盖**。
+    现代理镜像真实路径（`swfproxy://app/load/4399swf/…/main.swf?u=…`，handler 只读 `?u=`，零成本），
+    键空间按游戏独立；代理 URL 另暂存 `window.__fbSwfProxyUrl` 供键派生脚本读取
+    （`ruffle-player.swfUrl` 从外部读取不可靠）
+  - **导入/导出 UI**（`SolViewerWindow` + `Sol/BrowserSaveBridge.cs`，桥由 `MainWindow` 实现）：
+    「读取页面存档」列出页内全部 Ruffle 存档（键/名/字节数，xn 同款 TCSO 校验）→
+    「导出所选到表格」取 base64 → `SolFile.Read` 直接进 P1.4 表格（可编辑后另存为 `.sol`）；
+    「导入 .sol 到页面」先解析验证**再**写回（坏文件绝不覆盖好存档），目标键优先复用页内同名键
+    （自动对齐游戏的 `localPath` 参数），否则按 movie URL 派生新键；写入后提示刷新生效
+  - 完成判据：84 tests（+6 逃逸契约测试）+ node 行为断言（列表/键派生/# 前缀规则 6 项）+
+    GUI 实测（真游戏存档跨重启存活并被列出；`swfproxy://app/load/4399swf/…` 路径镜像出现在
+    `Loading SWF file` 日志；`__fbSwfProxyUrl` 暂存与派生键形状 `app/load/4399swf/…/main.swf/<名>`）
+  - 已知边界：① 存档键带游戏 `localPath` 参数时，页内无同名旧键的导入会落到派生键上
+    （游戏读不到）—— 先玩一次让游戏建键再导入即可命中；② 按钮点击路径（bridge → UI）未做
+    端到端点击自动化（无 Avalonia 自动化手段），以脚本级验证 + 单测覆盖
 - [ ] **LICENSE 选定**（MIT 优先）—— 本地开发不阻塞，但公开发布 / 分发前必须补，否则等于未授权分发
 
 ### ⏳ 后续（等内存窗口或 P0 完成后）

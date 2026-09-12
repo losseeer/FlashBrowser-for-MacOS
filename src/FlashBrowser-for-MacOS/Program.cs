@@ -18,20 +18,51 @@ internal static class Program
     public static string? LaunchSolPath { get; private set; }
 
     /// <summary>
-    /// CEF on macOS does not allow multiple processes to share a cache directory;
-    /// using a per-launch unique path avoids "files in use" conflicts when running
-    /// the app multiple times in dev.
+    /// CEF storage root.
+    ///
+    /// <para><b>Persistent (default)</b>: <c>~/Library/Application Support/FlashBrowserForMacOS/CEF</c>.
+    /// Required by P1.5 — the embedded Ruffle writes game saves into localStorage, which
+    /// lives inside this profile; a per-launch temp directory meant every save was wiped
+    /// on exit. Cookies/sessions also survive, as a normal browser would.</para>
+    ///
+    /// <para><b>Temp (<c>--temp-profile</c>)</b>: the old behaviour — a unique directory per
+    /// launch, deleted on exit. Kept as a dev escape hatch because CEF on macOS does not
+    /// allow multiple processes to share a cache directory ("files in use" conflicts), so
+    /// a second app instance must be launched with this flag.</para>
     /// </summary>
+    private static string BuildCachePath(string[] args)
+    {
+        if (GetOption(args, "--temp-profile") is not null)
+        {
+            var tempPath = Path.Combine(
+                Path.GetTempPath(),
+                "FlashBrowserForMacOS_" + Guid.NewGuid().ToString("N"));
+            Diagnostics.Log($"cef profile: TEMP {tempPath}");
+            return tempPath;
+        }
+
+        var persistentPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "FlashBrowserForMacOS",
+            "CEF");
+        Directory.CreateDirectory(persistentPath);
+        Diagnostics.Log($"cef profile: persistent {persistentPath}");
+        return persistentPath;
+    }
+
     public static int Main(string[] args)
     {
         Diagnostics.Initialize(GetOption(args, "--diag-log"));
         LaunchSolPath = GetOption(args, "--sol");
 
-        var cachePath = Path.Combine(
-            Path.GetTempPath(),
-            "FlashBrowserForMacOS_" + Guid.NewGuid().ToString("N"));
+        var cachePath = BuildCachePath(args);
 
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => Shutdown(cachePath);
+        // Only the temp profile is disposable; deleting the persistent one would
+        // throw away game saves — the exact problem P1.5 exists to fix.
+        if (GetOption(args, "--temp-profile") is not null)
+        {
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => Shutdown(cachePath);
+        }
 
         AppBuilder.Configure<App>()
             .UsePlatformDetect()

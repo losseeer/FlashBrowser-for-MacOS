@@ -3,6 +3,7 @@ using Avalonia.Input;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using FlashBrowserForMacOS.Ruffle;
+using FlashBrowserForMacOS.Sol;
 using Xilium.CefGlue;
 using Xilium.CefGlue.Avalonia;
 using Xilium.CefGlue.Common.Events;
@@ -212,7 +213,34 @@ public partial class MainWindow : Window
         => _browser.ShowDeveloperTools();
 
     private void OnSolViewerClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-        => new SolViewerWindow().Show();
+        => new SolViewerWindow(CreateSaveBridge()).Show();
+
+    /// <summary>
+    /// P1.5: lets the .sol viewer read/write the page's Ruffle saves (localStorage).
+    /// Reads go through <see cref="AvaloniaCefBrowser.EvaluateJavaScript{T}"/> (result-bearing,
+    /// script must use <c>return</c>); writes are fire-and-forget <c>ExecuteScript</c>.
+    /// </summary>
+    private BrowserSaveBridge CreateSaveBridge() => new()
+    {
+        ListSavesAsync = () => EvaluateAsync<string>(BrowserSaveBridge.ListSavesScript),
+        FetchSaveAsync = key => EvaluateAsync<string>(BrowserSaveBridge.FetchSaveScript(key)),
+        PutSaveAsync = (key, base64Data) =>
+        {
+            _browser.ExecuteJavaScript(BrowserSaveBridge.PutSaveScript(key, base64Data));
+            return Task.CompletedTask;
+        },
+        DeriveKeyAsync = name => EvaluateAsync<string>(BrowserSaveBridge.DeriveKeyScript(name)),
+    };
+
+    private async Task<T?> EvaluateAsync<T>(string script) where T : class
+    {
+        if (!_browser.IsBrowserInitialized)
+        {
+            throw new InvalidOperationException("浏览器尚未初始化（页面还没有加载）。");
+        }
+
+        return await _browser.EvaluateJavaScript<T>(script, timeout: TimeSpan.FromSeconds(10));
+    }
 
     // ---- Address bar ----
 

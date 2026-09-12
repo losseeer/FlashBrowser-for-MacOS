@@ -14,7 +14,11 @@ namespace FlashBrowserForMacOS.Ruffle;
 /// Ruffle's internal URLLoader pulls at runtime) through a CORS-enabled proxy
 /// scheme, because 4399's resource hosts lack <c>Access-Control-Allow-Origin</c>.
 ///
-/// URL shape: <c>swfproxy://app/load?u=&lt;urlencoded absolute resource URL&gt;</c>
+/// URL shape: <c>swfproxy://app/load[&lt;any path&gt;]?u=&lt;urlencoded absolute resource URL&gt;</c>
+///
+/// The path portion is ignored by the handler, but callers (RuffleInjector) mirror the
+/// real resource path onto it: Ruffle derives SharedObject save keys from the movie URL,
+/// and mirroring keeps each game's saves in their own localStorage key namespace.
 ///
 /// The handler downloads the target server-side (with a 4399 <c>Referer</c> +
 /// browser User-Agent to defeat anti-hotlink) and returns the bytes with CORS

@@ -21,6 +21,13 @@
                      VerticalAlignment="Center" Opacity="0.7"
                      TextTrimming="CharacterEllipsis"/>
         </Grid>
+        <!-- Page-save row (P1.5): only visible when a BrowserSaveBridge is attached. -->
+        <Grid x:Name="SavePanel" ColumnDefinitions="Auto,Auto,Auto,Auto,*" Margin="0,6,0,0" IsVisible="False">
+          <Button Content="读取页面存档" Padding="10,4" Click="OnLoadPageSavesClicked"/>
+          <ComboBox Grid.Column="1" x:Name="SavesCombo" Margin="8,0,0,0" MinWidth="240" MaxDropDownHeight="260"/>
+          <Button Grid.Column="2" Content="导出所选到表格" Margin="8,0,0,0" Padding="10,4" Click="OnExportSelectedClicked"/>
+          <Button Grid.Column="3" Content="导入 .sol 到页面…" Margin="8,0,0,0" Padding="10,4" Click="OnImportSolClicked"/>
+        </Grid>
         <TextBlock x:Name="InfoText" Margin="0,6,0,0" FontSize="11" Opacity="0.8"/>
       </StackPanel>
     </Border>
