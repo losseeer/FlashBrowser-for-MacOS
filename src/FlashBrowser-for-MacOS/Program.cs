@@ -17,6 +17,8 @@ internal static class Program
     /// </summary>
     public static int Main(string[] args)
     {
+        Diagnostics.Initialize(GetOption(args, "--diag-log"));
+
         var cachePath = Path.Combine(
             Path.GetTempPath(),
             "FlashBrowserForMacOS_" + Guid.NewGuid().ToString("N"));
@@ -26,13 +28,7 @@ internal static class Program
         AppBuilder.Configure<App>()
             .UsePlatformDetect()
             .AfterSetup(_ => CefRuntimeLoader.Initialize(
-                new CefSettings
-                {
-                    RootCachePath = cachePath,
-                    // WindowlessRenderingEnabled = false → use the OS-native window
-                    // (on macOS this gives us AppKit-backed surfaces with proper HW accel).
-                    WindowlessRenderingEnabled = false
-                },
+                BuildCefSettings(cachePath, GetOption(args, "--debug-port")),
                 customSchemes: new[]
                 {
                     // Serves Ruffle (Flash emulator) assets: ruffle.js + core.*.js + *.wasm.
@@ -66,6 +62,54 @@ internal static class Program
             .StartWithClassicDesktopLifetime(args);
 
         return 0;
+    }
+
+    /// <summary>
+    /// Reads <c>--name=value</c> from the process arguments, or null when absent.
+    ///
+    /// <para>Needed because these two dev-only options have to survive an
+    /// <c>open --args</c> launch, where the environment cannot be injected (<c>launchctl
+    /// setenv</c> is refused without privileges and <c>open --env</c> is not honoured).</para>
+    /// </summary>
+    private static string? GetOption(string[] args, string name)
+    {
+        var prefix = name + "=";
+
+        foreach (var arg in args)
+        {
+            if (arg.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                return arg[prefix.Length..];
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Builds the CEF settings for this launch.
+    /// </summary>
+    private static CefSettings BuildCefSettings(string cachePath, string? debugPortText)
+    {
+        var settings = new CefSettings
+        {
+            RootCachePath = cachePath,
+            // WindowlessRenderingEnabled = false → use the OS-native window
+            // (on macOS this gives us AppKit-backed surfaces with proper HW accel).
+            WindowlessRenderingEnabled = false
+        };
+
+        // [DEV ONLY] --debug-port=<port> (or FB_DEBUG_PORT) opens CEF's DevTools
+        // remote-debugging endpoint on 127.0.0.1:<port>, which is what turns a GUI run into
+        // something a script can inspect. It has to go through this settings field: CefGlue
+        // builds CefMainArgs from the executable name alone (CefRuntimeLoader.cs:92), so a
+        // `--remote-debugging-port=` switch never reaches CEF.
+        if (int.TryParse(debugPortText ?? Environment.GetEnvironmentVariable("FB_DEBUG_PORT"), out var debugPort))
+        {
+            settings.RemoteDebuggingPort = debugPort;
+        }
+
+        return settings;
     }
 
     private static void Shutdown(string cachePath)

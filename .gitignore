@@ -21,3 +21,9 @@ publish/
 
 ## Local agent working memory (machine-specific env notes; not source)
 .workbuddy/
+
+## CEF run artifacts (created when the binary is launched with repo root as cwd)
+DawnCache/
+GPUCache/
+GrShaderCache/
+ShaderCache/

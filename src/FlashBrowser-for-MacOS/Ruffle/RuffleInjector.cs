@@ -191,41 +191,123 @@ public static class RuffleInjector
                     });
                 }
 
+                // Mount the player on a stage of our own, appended straight to <html> and
+                // therefore OUTSIDE <body>, instead of inside the page's game container.
+                //
+                // Why: Ruffle 0.6.0's load() requires the element to be connected
+                // ("if (this.element.isConnected && ...)"), so we cannot load it while
+                // detached. But the element also destroys itself in disconnectedCallback(),
+                // and load() awaits ensureFreshInstance() BEFORE it ever reaches
+                // stream_from()/load_data(). That await yields the event loop for at least
+                // 200ms (a setTimeout inside ensureFreshInstance). If the host page removes
+                // the player during that window, disconnectedCallback -> destroy() nulls
+                // this.instance, and the load dies with "reading 'stream_from'" of null.
+                //
+                // Passing the SWF bytes as `data` does NOT help: the removal happens inside
+                // ensureFreshInstance, i.e. before load_data() is called at all. The only
+                // fix is to keep the player somewhere the page does not manage, so nothing
+                // it does to its own game container (or to <body>) can detach us.
+                var OWN_STAGE_ID = '__ruffle_stage';
+
+                function createOwnStage(rect) {
+                    var prev = document.getElementById(OWN_STAGE_ID);
+                    if (prev && prev.parentNode) prev.parentNode.removeChild(prev);
+
+                    var stage = document.createElement('div');
+                    stage.id = OWN_STAGE_ID;
+                    stage.style.position = 'absolute';
+                    stage.style.zIndex = '2147483647';
+                    stage.style.background = '#000';
+
+                    // Cover the box the original <object>/<embed> occupied. Fall back to the
+                    // viewport when the element reports no box (hidden / zero-sized), so the
+                    // player is never parked off-screen at 0x0.
+                    if (rect && rect.width > 0 && rect.height > 0) {
+                        stage.style.left   = (rect.left + window.scrollX) + 'px';
+                        stage.style.top    = (rect.top  + window.scrollY) + 'px';
+                        stage.style.width  = rect.width  + 'px';
+                        stage.style.height = rect.height + 'px';
+                    } else {
+                        stage.style.position = 'fixed';
+                        stage.style.left = '0';
+                        stage.style.top = '0';
+                        stage.style.width = '100vw';
+                        stage.style.height = '100vh';
+                    }
+
+                    document.documentElement.appendChild(stage);
+                    return stage;
+                }
+
+                // The SWF address an element carries, including the <param name="movie">
+                // form used by an <object>.
+                function swfSourceOf(el) {
+                    if (!el || !el.getAttribute) return '';
+                    var src = el.getAttribute('src') || el.getAttribute('data') || '';
+                    if (!src && el.querySelector) {
+                        var p = el.querySelector('param[name="movie"], param[name="src"]');
+                        if (p) src = p.getAttribute('value') || '';
+                    }
+                    return src;
+                }
+
+                // Locate the element that actually carries the SWF. #flashgame1 is sometimes
+                // the <embed>/<object> itself and sometimes just a container wrapping them;
+                // a container has no src/data of its own, so taking it at face value yields
+                // an empty SWF URL and the load silently targets nothing.
+                function findFlashHost() {
+                    var byId = document.getElementById('flashgame1');
+                    var found = document.querySelectorAll('embed, object');
+                    var ordered = byId ? [byId].concat([].slice.call(found)) : [].slice.call(found);
+
+                    var fallback = null;
+                    for (var i = 0; i < ordered.length; i++) {
+                        var src = swfSourceOf(ordered[i]);
+                        if (!src) continue;
+                        if (/upload_swf|main\.swf/i.test(src)) return ordered[i];
+                        if (!fallback) fallback = ordered[i];
+                    }
+                    return fallback;
+                }
+
                 // Create ONE Ruffle player for the main game SWF and load it directly,
                 // bypassing polyfill's iframe recursion (which destroys the instance).
                 function loadMainGame(ruffle) {
-                    var el = document.getElementById('flashgame1');
-                    if (!el) {
-                        var all = document.querySelectorAll('embed, object');
-                        for (var i = 0; i < all.length; i++) {
-                            var s = all[i].getAttribute('src') || all[i].getAttribute('data') || '';
-                            if (/upload_swf|main\.swf/i.test(s)) { el = all[i]; break; }
-                        }
-                    }
+                    var el = findFlashHost();
                     if (!el) return false;
 
-                    var swfUrl = el.getAttribute('src') || el.getAttribute('data') || '';
+                    var swfUrl = swfSourceOf(el);
                     var proxyUrl = toProxy(swfUrl);
                     var fv = extractFlashvars(el);
 
                     var player = ruffle.createPlayer();
+                    // Measure the original host BEFORE detaching it.
+                    var rect = el.getBoundingClientRect();
                     var w = el.getAttribute('width'), h = el.getAttribute('height');
                     if (w) player.style.width = /^\d+$/.test(w) ? w + 'px' : w;
                     if (h) player.style.height = /^\d+$/.test(h) ? h + 'px' : h;
+                    if (!w && rect.width) player.style.width = rect.width + 'px';
+                    if (!h && rect.height) player.style.height = rect.height + 'px';
 
-                    // Replace the whole <object> host (not just the inner <embed>) so the
-                    // ruffle-player is a direct child of the game container, not a fallback
-                    // child of a Flash <object> that may get clobbered by the page.
+                    // Drop the original Flash host so its fallback content cannot show
+                    // through behind our stage. As before, remove the whole <object> when
+                    // the match was its inner <embed>.
                     var host = el.parentNode;
-                    if (host && host.nodeName === 'OBJECT') {
-                        host.parentNode.replaceChild(player, host);
-                    } else {
-                        el.parentNode.replaceChild(player, el);
+                    if (host && host.nodeName === 'OBJECT' && host.parentNode) {
+                        host.parentNode.removeChild(host);
+                    } else if (el.parentNode) {
+                        el.parentNode.removeChild(el);
                     }
+
+                    // Attach to our own stage FIRST: load() ignores a disconnected element.
+                    var stage = createOwnStage(rect);
+                    stage.appendChild(player);
 
                     var opts = { url: proxyUrl };
                     if (Object.keys(fv).length) opts.parameters = fv;
-                    player.load(opts);
+                    player.load(opts).catch(function(err) {
+                        console.error('[Ruffle] load failed:', err);
+                    });
                     return true;
                 }
 

@@ -97,18 +97,80 @@ Serious error ... reading 'stream_from'  ← this.instance 已 null
 - 行为断言：`navigator.plugins['Shockwave Flash']` truthy、`hasUsableFlash()` 返回 `true` ✅
   （复刻了 4399 `flashopen1.js` 的确切检测逻辑）
 
-**剩余阻塞（未变）**：主游戏 `main.swf`（69MB）加载时 `stream_from` null ——
-`load()` 的 `await ensureFreshInstance()` 两个 await 点让出事件循环期间，player 被从 DOM 移除
-触发 `disconnectedCallback → destroy() → this.instance = null`。方向 3 已阻断「Flash 检测」这条
-移除路径，但**尚未在 GUI 环境验证**是否还有其它脚本移除 player（MutationObserver 就是为此埋点）。
+**剩余阻塞（2026-09-12 反混淆 `ruffle.js` 0.6.0 后修正了归因）**：
+`load(options)` 的实现是 `loadedConfig = {...} → await this.ensureFreshInstance() →
+"url" in e ? stream_from(...) : "data" in e && load_data(...)`。**移除发生在 `ensureFreshInstance`
+内部，早于 `stream_from` / `load_data` 被调用** —— 证据是实测时间线里 `Ruffle instance destroyed.`
+（97ms）出现在 `Loading SWF file` **之前**。`ensureFreshInstance` 内部含
+`await new Promise(e => { window.setTimeout(e, 200) })`（音频非 running 时），那 97ms 正落在它里面。
+
+由此得到两条硬约束：
+
+1. `load()` 开头有 `if (this.element.isConnected && !this.isUnusedFallbackObject())` 守卫，
+   未连接就直接 `Ignoring attempt to play a disconnected or suspended Ruffle element` 并放弃加载
+   ⇒ **不能**「先在游离状态 load、完成后再插入 DOM」。
+2. `load_data(data, parameters, swfFileName)` **不接受 `base`**；`base` 是 Ruffle 的 **config 项**，
+   经 `fn(instance, loadedConfig)` → `setBaseUrl(loadedConfig.base)` 应用。
+
+**已实施的处置**：把 player 挂到宿主页面不管理的容器 —— 新建 `<html>` 直接子节点
+`#__ruffle_stage`（在 `<body>` 之外），按原 `<object>`/`<embed>` 的 `getBoundingClientRect()`
+绝对定位（零尺寸时退化为 `position: fixed` 铺满视口）。宿主页面删除游戏容器、甚至清空 `<body>`，
+都 detach 不到它，`disconnectedCallback` 因而不触发。**方向 3 已阻断「Flash 检测」这条移除路径，
+但「究竟哪个脚本、移除的是哪个节点」仍未在 GUI 实测确认**（MutationObserver 埋点就是为此）。
+
+**仍未验证**：2026-09-12 内存窗口不达标（`Pages free` 4266 页 ≈ 68 MB，低于 ~31k 的约定阈值；
+swap free 618 MB < 1 GB），GUI 级验证不可行。本次改动只做到 `node --check` + jsdom 行为验证。
 
 **下一步候选**：
 1. 待 GUI 环境内存恢复后跑一次，用 MutationObserver 日志确认 player 是否仍被移除、被谁移除
-2. data 路径：自己 fetch 字节 + `load({ data })`，完全脱离 DOM embed（注意补 flashvars + 内存峰值）
+2. ~~data 路径：自己 fetch 字节 + `load({ data })`，完全脱离 DOM embed~~ —— **已废弃**：移除在
+   `ensureFreshInstance` 内，`load_data` 根本走不到；且 69 MB SWF 进 ArrayBuffer 在本机是内存峰值风险
 3. 升级 Ruffle：0.6.0 的 DOM 生命周期/多实例修复见 ruffle-rs/ruffle 后续 release
+4. 顺带修掉的既有缺陷：`#flashgame1` 有时只是包着 `<embed>` 的容器，原逻辑 `getElementById`
+   命中容器后不再回退，`swfUrl` 取到空串 → 加载必然落空。现改为优先选「自身带 `src`/`data`
+   （含 `param[name="movie"]`）且匹配 `upload_swf|main.swf`」的元素
 
 **环境限制**：本机空闲内存仅 ~19MB（`Pages free`），CEF 一启动即被 SIGKILL（exit 137，0 行日志），
 GUI 级验证当前不可行；方向 3 的 JS 逻辑改用 node 环境验证。
+
+## GUI 观测手段（本机实测，2026-09-12）
+
+本机对 GUI 的默认观测能力**几乎全被权限挡住**，下面这张表是逐条实测结果，别再重复试探：
+
+| 手段 | 结果 |
+|---|---|
+| `screencapture -x` | ❌ `could not create image from display`（无屏幕录制权限） |
+| `osascript` + System Events | ❌ 被拒；**且会在屏幕上留下待处理的 SecurityAgent 授权弹窗** |
+| `ps`（含 `ps -p PID`） | ❌ 机器级 `operation not permitted`，**关掉沙箱也一样** |
+| `log show` | ❌ `Cannot run while sandboxed`（关掉沙箱标志也一样） |
+| `launchctl setenv` | ❌ `Not privileged to set domain environment` |
+| `open --env` / `open --args` | ❌ 应用都收不到 |
+| CEF 命令行开关 | ❌ **永远无效** —— `CefRuntimeLoader.cs:92` 只把 exe 名传进 `CefMainArgs` |
+| `.workbuddy/gui-tools/winlist.swift` | ✅ 枚举屏幕窗口（owner/pid/layer/bounds **不需屏幕录制权限**） |
+| 应用内诊断日志（`Diagnostics.cs`） | ✅ `FB_DIAG_LOG=<file>` 或 `--diag-log=<file>` |
+| `CefSettings.RemoteDebuggingPort` | ✅ `--debug-port=<n>` / `FB_DEBUG_PORT`；`curl http://127.0.0.1:<n>/json` |
+
+**诊断日志**（默认完全空操作，只有给了路径才写）：记录 `BrowserInitialized` / `AddressChanged` /
+`LoadStart` / `LoadEnd` / `LoadError` / `ConsoleMessage` / 控件布局 / `Opened` / 8 秒哨兵。
+用法：
+
+```bash
+# 直接跑 bundle 内可执行文件（这样 stderr 也能拿到；open 会把输出吞掉）
+FB_DIAG_LOG=/tmp/fb.log FB_DEBUG_PORT=9222 \
+  ./dist-FlashBrowser-for-MacOS.app/Contents/MacOS/FlashBrowserForMacOS
+```
+
+**窗口枚举工具**（源码在 `.workbuddy/gui-tools/winlist.swift`；该目录被 gitignore，**新 clone 不带它** ——
+它用 `CGWindowListCopyWindowInfo`，只取 owner/pid/layer/bounds，因此不需要屏幕录制权限）：
+
+```bash
+swiftc -O -o /tmp/winlist .workbuddy/gui-tools/winlist.swift
+/tmp/winlist flash        # 按 owner 名过滤
+```
+
+> ⚠️ **启动方式的一条更正**：`.app/Contents/MacOS/FlashBrowserForMacOS` **可以直接跑**
+> （只打一条 `Class ExtensionDropdownHandler is implemented in both …` 的 objc 警告，不崩、窗口正常）。
+> 只有**不在 bundle 里**的裸 `publish/` 二进制才会撞 Objective-C class duplicate。
 
 ---
 
@@ -116,17 +178,52 @@ GUI 级验证当前不可行；方向 3 的 JS 逻辑改用 node 环境验证。
 
 > 未完成事项清单。阻塞中的与可立即推进的分开列，每项都带可观察的完成判据。
 >
-> ⚠️ **需要 GUI 的任务**（P0 / P3 / P4）执行前先跑 `vm_stat | head -6` 与 `sysctl vm.swapusage`，**两条都满足**（`Pages free` ≥ ~31k 且 swap free ≥ ~1GB）才动手 —— 本机 swap 常接近耗尽，那才是 CEF 被 SIGKILL（exit 137、日志 0 行）的直接原因。纯 C# 任务（P1）不受此限制。
+> ⚠️ **需要 GUI 的任务**（P0 / P3 / P4）执行前先跑 `vm_stat | head -6` 与 `sysctl vm.swapusage`（`Pages free` ≥ ~31k 且 swap free ≥ ~1GB）—— 本机 swap 常接近耗尽，那是 CEF 被 SIGKILL（exit 137、日志 0 行）的直接原因。
+> ⚠️ 但内存**不是**唯一门槛：2026-09-12 实测还出现过**间歇性启动卡死**（约 8 次运行中 1 次，浏览器未初始化、
+> 原因未定位，见 P0-0）。GUI 前置检查过了仍要盯诊断日志里的 `browser initialized`。
 
 ### 🔴 阻塞中
 
-- [ ] **P0-1 · 解决 `<ruffle-player>` 被 4399 脚本从 DOM 移除**（Phase 3b —— 当前唯一硬阻塞，依赖 GUI）
-  - 根因：Ruffle `load()` 的 `await ensureFreshInstance()` 让出事件循环期间，player 被移出 DOM → `disconnectedCallback → destroy() → this.instance = null` → `Serious error ... reading 'stream_from'`
-  - 首选方案：自己拉 SWF 字节 → `load({ data, base, parameters })`，彻底脱离 DOM 生命周期
-    - `parameters`（flashvars）已在 `RuffleInjector.cs:227` 传入，照搬即可
-    - **`base` 必须补** —— 不传时 SWF 内相对路径的外链资源会解析到 `swfproxy://app/`，而该 handler 只认 `?u=` 形态
-  - 备用方案：MutationObserver 把 player 挂回原容器（需防死循环）/ 升级 Ruffle 0.7+（0.6.0 有已知 DOM 生命周期 bug）
-  - 完成判据：MutationObserver 不再打印 `ruffle-player REMOVED`；`Ruffle instance destroyed.` 计数 = 0；至少 1 个 `main.swf` 进游戏画面
+- [ ] **P0-0 · 间歇性启动卡死（疑似，低优先级）**（2026-09-12 从「浏览器实例从未创建」降级改写）
+  - 当天约 8 次运行中**仅 1 次**出现：窗口正常打开、控件完成布局，但 `browser initialized` 不触发、
+    页面不加载、`/json` 目标列表为空。随后**连续 4 次运行全部正常**，`dotnet-stack` 采样主线程
+    栈顶为正常的 `Avalonia.Threading.Dispatcher.MainLoop`（该次采样发生在正常运行的实例上）
+  - 早先把「8 秒哨兵 `DispatcherTimer.RunOnce` 不触发」解读为 UI 线程被阻塞 —— **该判据已作废**：
+    `RunOnce` 返回的 `IDisposable` 当时未被持有引用，被 GC 回收的定时器同样不触发，
+    与线程卡死无法区分；诊断代码已改为把定时器存进字段（`MainWindow.axaml.cs`）
+  - **未解决**：卡死那次没赶上采样，根因未知。复现概率低、且重开即恢复，不阻塞其余工作
+  - 完成判据：在卡死发生的现场抓到主线程/CEF UI 线程的线程栈（`dotnet-stack report -p <pid>`，
+    需 `DOTNET_ROOT=~/.dotnet` + `PATH+=~/.dotnet/tools`）
+- [x] **P0-1 · 解决 `<ruffle-player>` 被 4399 脚本从 DOM 移除**（2026-09-12 **GUI 验证通过**）
+  - 根因（2026-09-12 反混淆 `ruffle.js` 0.6.0 后修正）：移除发生在 `load()` 的
+    `await ensureFreshInstance()` **内部**，早于 `stream_from` / `load_data` 被调用；
+    `ensureFreshInstance` 内含 `await new Promise(setTimeout 200)`，实测 `Ruffle instance destroyed.`
+    （97ms）正落在其中
+  - ⚠️ **原「自己拉字节 → `load({ data, base })`」首选方案已废弃**（因果不成立）：`load({ data })`
+    只把字节提到前面，而 `this.instance` 在 `ensureFreshInstance` 里就已被
+    `disconnectedCallback → destroy()` 置 null，`load_data` 根本走不到；且 69 MB SWF 进
+    ArrayBuffer 在本机（free ≈ 68 MB）是内存峰值风险
+  - ⚠️ 两条硬约束（同为实证）：`load()` 开头 `if (this.element.isConnected && ...)` 守卫
+    ⇒ **不能**「游离状态先 load 再插入」；`base` 是 **config 项**（`setBaseUrl(loadedConfig.base)`），
+    **不是** `load_data` 的参数
+  - 处置：**把 player 挂到宿主页面不管理的容器** —— 新建 `<html>` 直接子节点 `#__ruffle_stage`
+    （`<body>` 之外），按原宿主的 `getBoundingClientRect()` 绝对定位，零尺寸时退化为 `fixed`
+  - 顺带修掉的既有缺陷：`#flashgame1` 有时只是包着 `<embed>` 的容器，原逻辑命中容器后不再回退，
+    `swfUrl` 取到空串 → 加载必然落空。现优先选「自带 `src`/`data`（含 `param[name="movie"]`）
+    且匹配 `upload_swf|main.swf`」的元素
+  - **GUI 验证（2026-09-12，DevTools 协议轮询 + 诊断日志，游戏 `205551_4.htm`）**：
+    - CDP `Runtime.evaluate` 每 8s 采样、持续 70s 共 10 次，全部稳定：
+      `#__ruffle_stage` `stageExists=true, stageConnected=true, stageInBody=false`；
+      `ruffle-player` `playerConnected=true, playerSize=[800,600]`（挂 `<html>`、`<body>` 之外，
+      全程 `isConnected`）
+    - 诊断日志：`browser initialized` → 页面 HTTP 200 → `New Ruffle instance created (0.6.0,
+      wgpu-webgl)` → `Loading SWF file swfproxy://...main.swf`；**全程 0 次
+      `Ruffle instance destroyed`**；早期注入生效（`[Ruffle-early] navigator.plugins spoofed`）
+  - ⚠️ 遗留（新发现，记为 P0-1b）：游戏运行期经 Ruffle **内部 URLLoader** 拉的 4399 平台资源
+    （`stat.api.4399.com/flash_ctrl_version.xml`、`cdn.comment.4399pk.com/control/*.swf|gif` 广告/控制件）
+    走的是浏览器原生 fetch（不经 `swfproxy`），被 CORS 拦截报 `FetchError("Got JS error")`；
+    主游戏 `main.swf` 本体不受影响。另 `blockflashtip.html` 加载被 `ERR_ABORTED`（疑似被我们的
+    检测屏蔽路径中止，无害但可确认一次）
 
 ### 🟢 可立即推进（纯 C#，不依赖 GUI）
 
