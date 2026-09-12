@@ -21,7 +21,7 @@ APP_NAME="${APP_NAME:-FlashBrowserForMacOS}"
 # APP_BASENAME is the human-facing name (repo name, bundle dir name) and DOES
 # contain hyphens. Deriving the bundle path from APP_NAME would emit
 # ./dist-FlashBrowserForMacOS.app — a second, parallel bundle that the docs
-# (README / PLAN.md §10.2) never point at. Keep the canonical hyphenated name
+# (README「运行」) never point at. Keep the canonical hyphenated name
 # so a rebuild always overwrites the bundle the docs reference.
 APP_BASENAME="${APP_BASENAME:-FlashBrowser-for-MacOS}"
 APP_BUNDLE="${APP_BUNDLE:-./dist-${APP_BASENAME}.app}"
